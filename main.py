@@ -4,6 +4,21 @@ import time
 import hashlib
 import requests
 import telebot
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot Khahanfreebot is running!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+Thread(target=run_web_server, daemon=True).start()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
@@ -62,4 +77,4 @@ def process_message(message):
 if __name__ == "__main__":
     print("Bot Khahanfreebot đang chạy...")
     bot.infinity_polling()
-  
+    
