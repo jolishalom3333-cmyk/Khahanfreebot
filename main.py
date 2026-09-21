@@ -26,14 +26,14 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
             if chat_id and chat_id.isdigit():
                 msg = (
-                    f"🎉 **Đơn hàng mới được ghi nhận!**\n\n"
-                    f"📦 **Mã đơn:** `{order_id}`\n"
-                    f"💰 **Hoa hồng dự kiến:** {commission} VNĐ\n"
-                    f"📌 **Trạng thái:** {status.upper()}\n\n"
+                    f"🎉 Đơn hàng mới được ghi nhận!\n\n"
+                    f"📦 Mã đơn: {order_id}\n"
+                    f"💰 Hoa hồng dự kiến: {commission} VNĐ\n"
+                    f"📌 Trạng thái: {status.upper()}\n\n"
                     f"Cảm ơn bạn đã mua hàng qua Bot!"
                 )
                 try:
-                    bot.send_message(int(chat_id), msg, parse_mode='Markdown')
+                    bot.send_message(int(chat_id), msg)
                 except Exception as e:
                     print(f"Lỗi gửi tin nhắn Telegram: {e}")
 
@@ -57,8 +57,8 @@ def run_web_server():
 def send_welcome(message):
     bot.reply_to(
         message,
-        "👋 **Chào mừng bạn đến với Khahanfreebot - Bot Hoàn Tiền!**\n\n"
-        "Hãy gửi link sản phẩm **Shopee** hoặc **TikTok Shop** vào đây, "
+        "👋 Chào mừng bạn đến với Khahanfreebot - Bot Hoàn Tiền!\n\n"
+        "Hãy gửi link sản phẩm Shopee hoặc TikTok Shop vào đây, "
         "Bot sẽ tạo link mua hàng hoàn tiền cho bạn nhé! 🛍️"
     )
 
@@ -92,11 +92,11 @@ def process_link(message):
         return
 
     reply_text = (
-        f"✅ **Link mua hàng tích xu/hoàn tiền ({platform}):**\n\n"
+        f"✅ Link mua hàng tích xu/hoàn tiền ({platform}):\n\n"
         f"🔗 {affiliate_url}\n\n"
         f"👉 Hãy bấm vào link trên để tiến hành mua hàng. Sau khi đặt thành công, hệ thống sẽ tự động gửi thông báo tích xu về đây cho bạn!"
     )
-    bot.reply_to(message, reply_text, parse_mode='Markdown')
+    bot.reply_to(message, reply_text)
 
 if __name__ == '__main__':
     server_thread = Thread(target=run_web_server)
