@@ -8,6 +8,7 @@ import telebot
 # 1. Cấu hình Token Telegram & Mã Adpia
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADPIA_ACCOUNT = "A100156876"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # 2. Xử lý Webhook Postback từ Adpia
@@ -15,7 +16,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
         
-        # Nếu Adpia gọi vào đường dẫn /adpia-postback
         if parsed_path.path == '/adpia-postback':
             query_params = urllib.parse.parse_qs(parsed_path.query)
             
@@ -24,7 +24,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             commission = query_params.get('commission', ['0'])[0]
             status = query_params.get('status', ['pending'])[0]
 
-            # Gửi tin nhắn thông báo về Telegram cho khách hàng
             if chat_id and chat_id.isdigit():
                 msg = (
                     f"🎉 **Đơn hàng mới được ghi nhận!**\n\n"
@@ -68,7 +67,6 @@ def process_link(message):
     text = message.text
     chat_id = message.chat.id
     
-    # Tìm link trong tin nhắn
     urls = re.findall(r'https?://[^\s]+', text)
     if not urls:
         bot.reply_to(message, "⚠️ Vui lòng gửi một đường link sản phẩm hợp lệ (Shopee hoặc TikTok Shop).")
@@ -77,7 +75,6 @@ def process_link(message):
     raw_url = urls[0]
     encoded_url = urllib.parse.quote(raw_url, safe='')
 
-    # Kiểm tra loại link Shopee hay TikTok
     if "shopee" in raw_url.lower() or "shp.ee" in raw_url.lower():
         affiliate_url = (
             f"https://click.adpia.vn/tracking.php?m=shopee&a={ADPIA_ACCOUNT}&l=9999"
@@ -102,11 +99,9 @@ def process_link(message):
     bot.reply_to(message, reply_text, parse_mode='Markdown')
 
 if __name__ == '__main__':
-    # Chạy Web Server nhận Postback ở luồng riêng
     server_thread = Thread(target=run_web_server)
     server_thread.start()
     
-    # Chạy Bot Telegram
     print("Bot đang chạy...")
     bot.polling(none_stop=True)
     
