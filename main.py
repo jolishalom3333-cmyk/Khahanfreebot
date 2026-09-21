@@ -6,7 +6,7 @@ from threading import Thread
 import telebot
 
 # 1. Cấu hình Token Telegram & Mã Adpia
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8667094035:AAE5-ZvNAdc96n1C-a5n1MMnZJRaFAnqOWo")
 ADPIA_ACCOUNT = "A100156876"
 
 bot = telebot.TeleBot(BOT_TOKEN)
