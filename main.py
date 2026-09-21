@@ -1,80 +1,113 @@
 import os
 import re
-import time
-import hashlib
-import requests
-import telebot
-from threading import Thread
+import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
+import telebot
 
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+# 1. Cấu hình Token Telegram & Mã Adpia
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+ADPIA_ACCOUNT = "A100156876"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# 2. Xử lý Webhook Postback từ Adpia
+class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot Khahanfreebot is running!")
+        parsed_path = urllib.parse.urlparse(self.path)
+        
+        # Nếu Adpia gọi vào đường dẫn /adpia-postback
+        if parsed_path.path == '/adpia-postback':
+            query_params = urllib.parse.parse_qs(parsed_path.query)
+            
+            order_id = query_params.get('order_id', [''])[0]
+            chat_id = query_params.get('utm_source', [''])[0]
+            commission = query_params.get('commission', ['0'])[0]
+            status = query_params.get('status', ['pending'])[0]
+
+            # Gửi tin nhắn thông báo về Telegram cho khách hàng
+            if chat_id and chat_id.isdigit():
+                msg = (
+                    f"🎉 **Đơn hàng mới được ghi nhận!**\n\n"
+                    f"📦 **Mã đơn:** `{order_id}`\n"
+                    f"💰 **Hoa hồng dự kiến:** {commission} VNĐ\n"
+                    f"📌 **Trạng thái:** {status.upper()}\n\n"
+                    f"Cảm ơn bạn đã mua hàng qua Bot!"
+                )
+                try:
+                    bot.send_message(int(chat_id), msg, parse_mode='Markdown')
+                except Exception as e:
+                    print(f"Lỗi gửi tin nhắn Telegram: {e}")
+
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Bot Khahanfreebot is running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
     server.serve_forever()
 
-Thread(target=run_web_server, daemon=True).start()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
-SHOPEE_SECRET = os.getenv("SHOPEE_SECRET")
-
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-def get_shopee_affiliate_link(original_url):
-    timestamp = int(time.time())
-    query = f'''
-    mutation {{
-        generateShortLink(input: {{ originUrl: "{original_url}" }}) {{
-            shortLink
-        }}
-    }}
-    '''
-    payload = f'{{"query": "{query}"}}'
-    
-    base_str = f"{SHOPEE_APP_ID}{timestamp}{payload}{SHOPEE_SECRET}"
-    signature = hashlib.sha256(base_str.encode('utf-8')).hexdigest()
-
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'SHA256 Credential={SHOPEE_APP_ID}, Timestamp={timestamp}, Signature={signature}'
-    }
-
-    try:
-        response = requests.post("https://open-api.affiliate.shopee.vn/graphql", headers=headers, data=payload.encode('utf-8'), timeout=10)
-        res_data = response.json()
-        return res_data.get('data', {}).get('generateShortLink', {}).get('shortLink')
-    except Exception as e:
-        print("Lỗi API Shopee:", e)
-        return None
+# 3. Lắng nghe tin nhắn từ Telegram
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(
+        message,
+        "👋 **Chào mừng bạn đến với Khahanfreebot - Bot Hoàn Tiền!**\n\n"
+        "Hãy gửi link sản phẩm **Shopee** hoặc **TikTok Shop** vào đây, "
+        "Bot sẽ tạo link mua hàng hoàn tiền cho bạn nhé! 🛍️"
+    )
 
 @bot.message_handler(func=lambda message: True)
-def process_message(message):
+def process_link(message):
     text = message.text
-    urls = re.findall(r'https?://[^\s]+', text)
+    chat_id = message.chat.id
     
+    # Tìm link trong tin nhắn
+    urls = re.findall(r'https?://[^\s]+', text)
     if not urls:
-        bot.reply_to(message, "👋 Chào bạn! Hãy gửi cho mình một đường link Shopee để lấy link hoàn tiền nhé.")
+        bot.reply_to(message, "⚠️ Vui lòng gửi một đường link sản phẩm hợp lệ (Shopee hoặc TikTok Shop).")
         return
 
-    url = urls[0]
-    
-    if "shopee.vn" in url or "shope.ee" in url:
-        bot.reply_to(message, "⏳ Đang tạo link Shopee hoàn tiền...")
-        aff_link = get_shopee_affiliate_link(url)
-        if aff_link:
-            bot.send_message(message.chat.id, f"✅ **Link mua hàng Shopee hoàn tiền của bạn:**\n👉 {aff_link}", parse_mode="Markdown")
-        else:
-            bot.send_message(message.chat.id, "❌ Lỗi tạo link Shopee. Vui lòng kiểm tra lại link hoặc cấu hình API.")
-    else:
-        bot.send_message(message.chat.id, "⚠️ Hiện tại bot hỗ trợ tốt nhất cho link Shopee. Vui lòng dán đúng link Shopee!")
+    raw_url = urls[0]
+    encoded_url = urllib.parse.quote(raw_url, safe='')
 
-if __name__ == "__main__":
-    print("Bot Khahanfreebot đang chạy...")
-    bot.infinity_polling()
+    # Kiểm tra loại link Shopee hay TikTok
+    if "shopee" in raw_url.lower() or "shp.ee" in raw_url.lower():
+        affiliate_url = (
+            f"https://click.adpia.vn/tracking.php?m=shopee&a={ADPIA_ACCOUNT}&l=9999"
+            f"&tu={encoded_url}&utm_source={chat_id}"
+        )
+        platform = "Shopee"
+    elif "tiktok" in raw_url.lower():
+        affiliate_url = (
+            f"https://click.adpia.vn/tracking.php?m=tiktoksharelink&a={ADPIA_ACCOUNT}&l=9999"
+            f"&tu={encoded_url}&utm_source={chat_id}"
+        )
+        platform = "TikTok Shop"
+    else:
+        bot.reply_to(message, "❌ Hiện tại Bot chỉ hỗ trợ đổi link Shopee và TikTok Shop thôi ạ.")
+        return
+
+    reply_text = (
+        f"✅ **Link mua hàng tích xu/hoàn tiền ({platform}):**\n\n"
+        f"🔗 {affiliate_url}\n\n"
+        f"👉 Hãy bấm vào link trên để tiến hành mua hàng. Sau khi đặt thành công, hệ thống sẽ tự động gửi thông báo tích xu về đây cho bạn!"
+    )
+    bot.reply_to(message, reply_text, parse_mode='Markdown')
+
+if __name__ == '__main__':
+    # Chạy Web Server nhận Postback ở luồng riêng
+    server_thread = Thread(target=run_web_server)
+    server_thread.start()
+    
+    # Chạy Bot Telegram
+    print("Bot đang chạy...")
+    bot.polling(none_stop=True)
     
