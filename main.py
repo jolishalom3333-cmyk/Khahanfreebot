@@ -198,7 +198,7 @@ def process_link(message):
 
         reply_text = (
             f"🛍️ <b>LINK MUA HÀNG HOÀN TIỀN ({platform.upper()})</b>\n\n"
-            f"🌸 <b>Hoa hồng dự kiến:</b> Lên đến 15%\n"
+            f"🔴 <b>Hoa hồng hoàn tiền: 70%</b>\n"
             f"⚡ <b>Trạng thái:</b> Đã kích hoạt tích xu"
         )
         
