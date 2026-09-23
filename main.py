@@ -3,18 +3,17 @@ import json
 import telebot
 from telebot import types
 
-# 1. Kiểm tra Token từ Render
-TOKEN = os.environ.get("BOT_TOKEN")
+# Tự động nhận cả 2 kiểu tên biến TELEGRAM_BOT_TOKEN hoặc BOT_TOKEN
+TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = os.environ.get("ADMIN_ID", "8860640969")
 
 if not TOKEN:
-    print("❌ LỖI: Chưa thêm biến BOT_TOKEN trên Render Environment Variables!")
+    print("❌ LỖI: Không tìm thấy Token Telegram trên Render!")
     exit(1)
 
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "user_data.json"
 
-# 2. Hàm đọc/ghi dữ liệu an toàn tuyệt đối (Chống lỗi NoneType)
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -38,7 +37,6 @@ def main_keyboard():
     markup.add(types.KeyboardButton("📦 Đơn hàng của tôi"), types.KeyboardButton("💳 Ví & Số dư"))
     return markup
 
-# 3. Lệnh /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = str(message.from_user.id)
@@ -48,7 +46,6 @@ def send_welcome(message):
         save_data(data)
     bot.reply_to(message, f"👋 Chào {message.from_user.first_name}!\n\nHãy dán link Shopee/TikTok vào đây để nhận link hoàn tiền 70% nhé.", reply_markup=main_keyboard())
 
-# 4. Xem đơn hàng (Đã fix lỗi NoneType khi lặp danh sách)
 @bot.message_handler(func=lambda msg: msg.text == "📦 Đơn hàng của tôi")
 def show_orders(message):
     user_id = str(message.from_user.id)
@@ -71,7 +68,6 @@ def show_orders(message):
     msg_text += f"💵 <b>TỔNG TÍCH LŨY: {total:,.0f} VNĐ</b>"
     bot.reply_to(message, msg_text, parse_mode="HTML")
 
-# 5. Xem số dư
 @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
 def show_balance(message):
     user_id = str(message.from_user.id)
@@ -80,7 +76,6 @@ def show_balance(message):
     balance = user_info.get("balance", 0)
     bot.reply_to(message, f"💳 <b>VÍ VÀ SỐ DƯ</b>\n\n💰 Số dư khả dụng: <b>{balance:,.0f} VNĐ</b>\n\n<i>(Rút tiền vào ngày 30 hàng tháng khi đủ từ 50.000 VNĐ)</i>", parse_mode="HTML")
 
-# 6. Lệnh cộng tiền nhanh dành cho Admin
 @bot.message_handler(commands=['congtien'])
 def quick_add(message):
     if str(message.from_user.id) != str(ADMIN_ID):
@@ -111,7 +106,6 @@ def quick_add(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Lỗi: {str(e)}")
 
-# 7. Chuyển đổi link
 @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
 def convert_link(message):
     user_id = message.from_user.id
