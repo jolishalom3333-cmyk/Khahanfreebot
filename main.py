@@ -133,7 +133,7 @@ def my_balance(message):
 def convert_link(message):
     uid = message.from_user.id
     raw_url = message.text.strip()
-    link_adpia = f"https://click.adpia.vn/click.php?m=shoppemcn&a=MA_AFFILIATE_CUABAN&sub_id={uid}&url={raw_url}"
+    link_adpia = f"https://click.adpia.vn/click.php?m=shoppemcn&a=A100156876&sub_id={uid}&url={raw_url}"
     bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
 
 if __name__ == "__main__":
