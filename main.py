@@ -69,6 +69,21 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                         )
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn cho khách {target_id}: {e}")
+                    # 🔔 Tự động nhắn tin báo lợi nhuận cho Admin
+                    if ADMIN_ID:
+                        try:
+                            admin_profit = int(total_comm - cashback)
+                            bot.send_message(
+                                ADMIN_ID,
+                                f"🔔 **CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!**\n\n"
+                                f"👤 **ID Khách:** `{target_id}`\n"
+                                f"💰 **Hoa hồng Adpia:** {int(total_comm):,} VNĐ\n"
+                                f"🎁 **Hoàn cho khách (60%):** {cashback:,} VNĐ\n"
+                                f"💵 **Lợi nhuận giữ lại (40%):** +{admin_profit:,} VNĐ",
+                                parse_mode="Markdown"
+                            )
+                        except Exception as e:
+                            print(f"Lỗi gửi tin báo Admin: {e}")
 
         except Exception as e:
             print(f"Lỗi xử lý Postback: {e}")
