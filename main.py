@@ -3,7 +3,7 @@ import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import telebot
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 # 1. Đọc biến môi trường từ Render
 TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -133,9 +133,10 @@ def my_balance(message):
 def convert_link(message):
     uid = message.from_user.id
     raw_url = message.text.strip()
-    link_adpia = f"https://click.adpia.vn/click.php?m=shoppemcn&a=A100156876&sub_id={uid}&url={raw_url}"
+    encoded_url = quote(raw_url, safe='')
+    link_adpia = f"https://click.adpia.vn/tracking.php?m=shopee&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
     bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
-
+    
 if __name__ == "__main__":
     bot.infinity_polling()
     
