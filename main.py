@@ -7,7 +7,7 @@ from urllib.parse import urlparse, parse_qs, quote
 
 # 1. Đọc biến môi trường từ Render
 TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = os.getenv("ADMIN_ID") or "8860640969"
 
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "user_data.json"
