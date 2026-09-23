@@ -47,8 +47,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 target_id = str(sub_id_list[0]).strip()
                 total_comm = float(comm_list[0])
                 
-                # Tính 70% hoa hồng hoàn lại cho khách
-                cashback = int(total_comm * 0.70)
+                # Tính 60% hoa hồng hoàn lại cho khách
+                cashback = int(total_comm * 0.60)
 
                 if cashback > 0 and target_id:
                     if target_id not in user_data:
@@ -64,7 +64,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                         bot.send_message(
                             target_id, 
                             f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
-                            f"💰 Bạn được cộng **+{cashback:,} VNĐ** (70% hoa hồng) vào ví tích lũy!",
+                            f"💰 Bạn được cộng **+{cashback:,} VNĐ** (60% hoa hồng) vào ví tích lũy!",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
@@ -134,7 +134,7 @@ def convert_link(message):
     uid = message.from_user.id
     raw_url = message.text.strip()
     link_adpia = f"https://click.adpia.vn/click.php?m=shoppemcn&a=MA_AFFILIATE_CUABAN&sub_id={uid}&url={raw_url}"
-    bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 70%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
+    bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
 
 if __name__ == "__main__":
     bot.infinity_polling()
