@@ -108,14 +108,18 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
                     if ADMIN_ID:
                         try:
+                            client_name = user_data.get(target_id, {}).get("name", "Khách hàng")
+                            client_link = f"tg://user?id={target_id}"
+
                             bot.send_message(
                                 ADMIN_ID,
-                                f"🔔 **CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!**\n\n"
-                                f"👤 **ID Khách:** `{target_id}`\n"
-                                f"📦 **Mã đơn:** `{order_id}`\n"
-                                f"💰 **Hoa hồng Adpia:** {int(total_comm):,} VNĐ\n"
-                                f"🎁 **Hoàn cho khách (60%):** +{cashback:,} VNĐ\n"
-                                f"💵 **Lợi nhuận Admin (40%):** +{admin_profit:,} VNĐ",
+                                f"🔔 *CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!*\n\n"
+                                f"👤 *Khách hàng:* [{client_name}]({client_link})\n"
+                                f"🆔 ID Khách: `{target_id}`\n"
+                                f"📦 Mã đơn: `{order_id}`\n"
+                                f"💰 Hoa hồng Adpia: {int(total_comm):,} VNĐ\n"
+                                f"🎁 Hoàn cho khách (60%): +{cashback:,} VNĐ\n"
+                                f"💵 Lợi nhuận Admin (40%): +{admin_profit:,} VNĐ",
                                 parse_mode="Markdown"
                             )
                         except Exception as e:
@@ -138,9 +142,20 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # 4. Các câu lệnh Telegram Bot
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user_id = str(message.chat.id)
+    first_name = message.from_user.first_name or "Khách"
+    username = message.from_user.username or ""
+
+    if user_id not in user_data:
+        user_data[user_id] = {"balance": 0, "name": first_name, "username": username, "orders": []}
+    else:
+        user_data[user_id]["name"] = first_name
+        user_data[user_id]["username"] = username
+    save_data(user_data)
+
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📦 Đơn hàng của tôi", "💳 Ví & Số dư")
-    bot.reply_to(message, "👋 Chào mừng bạn! Hãy gửi link Shopee/TikTok để mua hàng hoàn tiền.", reply_markup=markup)
+    bot.reply_to(message, f"👋 Chào mừng {first_name}! Hãy gửi link Shopee/TikTok để mua hàng hoàn tiền.", reply_markup=markup)
 
 @bot.message_handler(commands=['congtien'])
 def cong_tien(message):
@@ -188,14 +203,28 @@ def convert_link(message):
     encoded_url = quote(raw_url, safe='')
     link_adpia = f"https://click.adpia.vn/tracking.php?m=shopee&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
     bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
+
 @bot.message_handler(commands=['danhsach'])
 def list_users(message):
     if str(message.from_user.id) != str(ADMIN_ID): return
     if not user_data:
         bot.reply_to(message, "📂 Chưa có khách hàng nào.")
         return
-    msg = "👥 **DANH SÁCH KHÁCH HÀNG:**\n\n" + "\n".join([f"• ID: `{uid}` | Ví: {info.get('balance',0):,} VNĐ" for uid, info in user_data.items()])
-    bot.reply_to(message, msg, parse_mode="Markdown")
+
+    msg = "📋 *DANH SÁCH KHÁCH HÀNG & SỐ DƯ:*\n\n"
+    for uid, info in user_data.items():
+        name = info.get("name", "Khách hàng")
+        username = f"(@{info['username']})" if info.get("username") else ""
+        balance = info.get("balance", 0)
+        chat_link = f"tg://user?id={uid}"
+        
+        msg += f"👤 *[{name}]({chat_link})* {username}\n"
+        msg += f"🆔 ID: `{uid}`\n"
+        msg += f"💰 Số dư: *{balance:,.0f} VNĐ*\n"
+        msg += f"👉 Nhắn nhanh: `/nhan {uid} Nội dung`\n"
+        msg += "-------------------------------\n"
+
+    bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
 
 @bot.message_handler(commands=['nhan'])
 def send_custom_msg(message):
@@ -209,3 +238,4 @@ def send_custom_msg(message):
         
 if __name__ == "__main__":
     bot.infinity_polling()
+                            
