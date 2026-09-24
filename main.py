@@ -12,7 +12,7 @@ ADMIN_ID = os.getenv("ADMIN_ID") or "8860640969"
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "user_data.json"
 
-# 2. Hàm đọc/ghi dữ liệu (Khai báo trước để toàn hệ thống dùng chung)
+# 2. Hàm đọc/ghi dữ liệu
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -29,66 +29,101 @@ def save_data(data):
     except Exception as e:
         print(f"Lỗi lưu file: {e}")
 
-# Tải dữ liệu sẵn vào bộ nhớ ngay khi khởi động
 user_data = load_data()
 
-# 3. Lớp xử lý Web (Duy trì Render + Tiếp nhận Postback Adpia)
+# 3. Lớp xử lý Web Server & Tiếp nhận Postback Adpia
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            # Phân tích dữ liệu Postback gửi về từ Adpia
             parsed_url = urlparse(self.path)
             query_params = parse_qs(parsed_url.query)
 
-            sub_id_list = query_params.get("sub_id") or query_params.get("subid")
+            # Lấy thông số từ Adpia (hỗ trợ cả sub_id, subid lẫn utm_source)
+            sub_id_list = query_params.get("sub_id") or query_params.get("subid") or query_params.get("utm_source")
             comm_list = query_params.get("commission") or query_params.get("comm")
+            status_list = query_params.get("status") or query_params.get("state")
+            order_id_list = query_params.get("order_id") or query_params.get("order_code")
 
             if sub_id_list and comm_list:
                 target_id = str(sub_id_list[0]).strip()
                 total_comm = float(comm_list[0])
-                
-                # Tính 60% hoa hồng hoàn lại cho khách
                 cashback = int(total_comm * 0.60)
+                admin_profit = int(total_comm - cashback)
 
-                if cashback > 0 and target_id:
-                    if target_id not in user_data:
-                        user_data[target_id] = {"balance": 0, "orders": []}
+                status = str(status_list[0]).lower().strip() if status_list else "success"
+                order_id = str(order_id_list[0]).strip() if order_id_list else "Mới"
 
-                    # Cập nhật trực tiếp vào ví trong bộ nhớ & lưu lại file
-                    user_data[target_id]["balance"] += cashback
-                    user_data[target_id]["orders"].append(f"🛒 Hoàn tiền đơn mới: +{cashback:,} VNĐ")
+                if target_id not in user_data:
+                    user_data[target_id] = {"balance": 0, "orders": []}
+
+                # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
+                if status in ["cancel", "cancelled", "0", "reject", "rejected"]:
+                    user_data[target_id]["balance"] = max(0, user_data[target_id]["balance"] - cashback)
+                    order_entry = f"❌ Hủy/Hoàn đơn #{order_id}: -{cashback:,} VNĐ"
+                    user_data[target_id]["orders"].append(order_entry)
                     save_data(user_data)
 
-                    # Tự động gửi tin nhắn Telegram báo cho khách
+                    try:
+                        bot.send_message(
+                            target_id,
+                            f"⚠️ **CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!**\n\n"
+                            f"📦 Mã đơn: `{order_id}`\n"
+                            f"🔻 Khấu trừ: **-{cashback:,} VNĐ** khỏi ví tích lũy.",
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"Lỗi gửi tin nhắn khách: {e}")
+
+                    if ADMIN_ID:
+                        try:
+                            bot.send_message(
+                                ADMIN_ID,
+                                f"🔻 **BÁO CÓ ĐƠN HÀNG BỊ HỦY!**\n\n"
+                                f"👤 ID Khách: `{target_id}`\n"
+                                f"📦 Mã đơn: `{order_id}`\n"
+                                f"🔻 Trừ hoàn khách (60%): -{cashback:,} VNĐ\n"
+                                f"🔻 Lợi nhuận Admin giảm (40%): -{admin_profit:,} VNĐ",
+                                parse_mode="Markdown"
+                            )
+                        except Exception as e:
+                            print(f"Lỗi gửi tin nhắn Admin: {e}")
+
+                # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
+                else:
+                    user_data[target_id]["balance"] += cashback
+                    order_entry = f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,} VNĐ"
+                    user_data[target_id]["orders"].append(order_entry)
+                    save_data(user_data)
+
                     try:
                         bot.send_message(
                             target_id, 
                             f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
+                            f"📦 Mã đơn: `{order_id}`\n"
                             f"💰 Bạn được cộng **+{cashback:,} VNĐ** (60% hoa hồng) vào ví tích lũy!",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
-                        print(f"Lỗi gửi tin nhắn cho khách {target_id}: {e}")
-                    # 🔔 Tự động nhắn tin báo lợi nhuận cho Admin
+                        print(f"Lỗi gửi tin nhắn khách: {e}")
+
                     if ADMIN_ID:
                         try:
-                            admin_profit = int(total_comm - cashback)
                             bot.send_message(
                                 ADMIN_ID,
                                 f"🔔 **CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!**\n\n"
                                 f"👤 **ID Khách:** `{target_id}`\n"
+                                f"📦 **Mã đơn:** `{order_id}`\n"
                                 f"💰 **Hoa hồng Adpia:** {int(total_comm):,} VNĐ\n"
-                                f"🎁 **Hoàn cho khách (60%):** {cashback:,} VNĐ\n"
-                                f"💵 **Lợi nhuận giữ lại (40%):** +{admin_profit:,} VNĐ",
+                                f"🎁 **Hoàn cho khách (60%):** +{cashback:,} VNĐ\n"
+                                f"💵 **Lợi nhuận Admin (40%):** +{admin_profit:,} VNĐ",
                                 parse_mode="Markdown"
                             )
                         except Exception as e:
-                            print(f"Lỗi gửi tin báo Admin: {e}")
+                            print(f"Lỗi gửi tin nhắn Admin: {e}")
 
         except Exception as e:
             print(f"Lỗi xử lý Postback: {e}")
 
-        # Luôn luôn trả về kết quả OK để Render duy trì trạng thái Live
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
@@ -98,7 +133,6 @@ def run_health_check():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# Chạy cổng web ẩn ở background
 threading.Thread(target=run_health_check, daemon=True).start()
 
 # 4. Các câu lệnh Telegram Bot
@@ -119,10 +153,12 @@ def cong_tien(message):
         if target_id not in user_data:
             user_data[target_id] = {"balance": 0, "orders": []}
         user_data[target_id]["balance"] += amount
+        order_entry = f"➕ Admin cộng tay: +{amount:,} VNĐ"
+        user_data[target_id]["orders"].append(order_entry)
         save_data(user_data)
         bot.reply_to(message, f"✅ Đã cộng {amount:,} VNĐ cho ID {target_id}")
         try:
-            bot.send_message(target_id, f"🎉 Bạn vừa được cộng {amount:,} VNĐ vào tài khoản!")
+            bot.send_message(target_id, f"🎉 Bạn vừa được Admin cộng +{amount:,} VNĐ vào ví tích lũy!")
         except Exception:
             pass
     except Exception:
@@ -135,7 +171,8 @@ def my_orders(message):
     if not orders:
         bot.reply_to(message, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
     else:
-        msg_text = "📦 **Danh sách đơn hàng:**\n" + "\n".join(orders)
+        recent = orders[-10:]
+        msg_text = "📦 **LỊCH SỬ ĐƠN HÀNG:**\n\n" + "\n".join([f"• {item}" for item in recent])
         bot.reply_to(message, msg_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
@@ -151,7 +188,6 @@ def convert_link(message):
     encoded_url = quote(raw_url, safe='')
     link_adpia = f"https://click.adpia.vn/tracking.php?m=shopee&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
     bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
-    
+
 if __name__ == "__main__":
     bot.infinity_polling()
-    
