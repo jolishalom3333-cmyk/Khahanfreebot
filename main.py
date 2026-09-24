@@ -188,6 +188,24 @@ def convert_link(message):
     encoded_url = quote(raw_url, safe='')
     link_adpia = f"https://click.adpia.vn/tracking.php?m=shopee&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
     bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
+@bot.message_handler(commands=['danhsach'])
+def list_users(message):
+    if str(message.from_user.id) != str(ADMIN_ID): return
+    if not user_data:
+        bot.reply_to(message, "📂 Chưa có khách hàng nào.")
+        return
+    msg = "👥 **DANH SÁCH KHÁCH HÀNG:**\n\n" + "\n".join([f"• ID: `{uid}` | Ví: {info.get('balance',0):,} VNĐ" for uid, info in user_data.items()])
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
+@bot.message_handler(commands=['nhan'])
+def send_custom_msg(message):
+    if str(message.from_user.id) != str(ADMIN_ID): return
+    try:
+        p = message.text.split(" ", 2)
+        bot.send_message(p[1], f"💬 **Lời nhắn từ Admin:**\n\n{p[2]}", parse_mode="Markdown")
+        bot.reply_to(message, "✅ Đã gửi tin nhắn thành công!")
+    except:
+        bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
+        
 if __name__ == "__main__":
     bot.infinity_polling()
