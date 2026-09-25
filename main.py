@@ -13,9 +13,15 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# Kết nối CSDL Supabase an toàn (Tự động xóa dấu [ ] nếu lỡ dán dư)
+# Kết nối CSDL Supabase an toàn & Lưu lỗi chi tiết
+supabase_error = ""
 supabase = None
-if SUPABASE_URL and SUPABASE_KEY:
+
+if not SUPABASE_URL:
+    supabase_error = "Thiếu SUPABASE_URL trên Render Environment"
+elif not SUPABASE_KEY:
+    supabase_error = "Thiếu SUPABASE_KEY trên Render Environment"
+else:
     try:
         from supabase import create_client
         clean_url = SUPABASE_URL.strip("[]'\" ")
@@ -23,7 +29,8 @@ if SUPABASE_URL and SUPABASE_KEY:
         supabase = create_client(clean_url, clean_key)
         print("✅ Kết nối Supabase thành công!")
     except Exception as e:
-        print(f"❌ Lỗi kết nối Supabase: {e}")
+        supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
+        print(f"❌ {supabase_error}")
 else:
     print("⚠️ CẢNH BÁO: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY!")
 
