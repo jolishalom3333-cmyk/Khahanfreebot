@@ -152,7 +152,7 @@ if bot:
         if str(message.from_user.id) != str(ADMIN_ID): return
         try:
             if not supabase:
-                bot.reply_to(message, "❌ Chưa kết nối Supabase thành công.")
+                bot.reply_to(message, f"❌ Chưa kết nối Supabase thành công!\n\n👉 **Lý do:** {supabase_error}")
                 return
             res = supabase.table('users').select('*').execute()
             users = res.data
