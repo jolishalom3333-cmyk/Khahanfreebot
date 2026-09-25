@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from urllib.parse import quote
 from flask import Flask, request
 import telebot
@@ -31,13 +32,10 @@ else:
     except Exception as e:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
-else:
-    print("⚠️ CẢNH BÁO: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY!")
 
 # --- 2. HÀM ĐỌC / GHI DỮ LIỆU TỪ SUPABASE ---
 def get_user(user_id):
     if not supabase:
-        print("❌ Supabase chưa kết nối thành công.")
         return None
     try:
         res = supabase.table('users').select('*').eq('id', str(user_id)).execute()
@@ -49,7 +47,6 @@ def get_user(user_id):
 
 def save_or_update_user(user_id, name=None, username=None, balance=None, orders=None):
     if not supabase:
-        print("❌ Supabase chưa kết nối thành công.")
         return
     try:
         user_id_str = str(user_id)
@@ -287,21 +284,17 @@ def webhook():
     return "OK", 200
 
 # --- 5. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
-import time
-
 def run_bot():
     if not bot:
         print("❌ Chưa có TOKEN Bot.")
         return
     print("🤖 Bot Telegram đang bắt đầu Polling...")
     
-    # Xóa Webhook cũ để tránh bị xung đột 409 Conflict
     try:
         bot.remove_webhook()
     except Exception as e:
         print(f"Cảnh báo xóa webhook: {e}")
 
-    # Vòng lặp tự động kết nối lại nếu bị ngắt mạng
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
@@ -309,10 +302,9 @@ def run_bot():
             print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
             time.sleep(5)
 
-# Tự động chạy Bot Thread
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
+                
