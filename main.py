@@ -115,7 +115,14 @@ if bot:
         uid = message.from_user.id
         raw_url = message.text.strip()
         encoded_url = quote(raw_url, safe='')
-        link_adpia = f"https://click.adpia.vn/tracking.php?m=shopee&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
+        
+        # TỰ ĐỘNG PHÂN LOẠI MERCHANT TƯƠNG ỨNG MỖI SÀN
+        if "tiktok" in raw_url.lower():
+            merchant = "tiktoksharelink"
+        else:
+            merchant = "shopee"
+
+        link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
         bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 60%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
 
     # --- LỆNH ADMIN ---
@@ -187,6 +194,7 @@ if bot:
 
 # --- 4. WEBHOOK NHẬN ĐƠN HÀNG HOÀN TIỀN TỪ ADPIA & HEALTH CHECK ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
+@app.route('/postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
     if request.method == 'HEAD':
         return "", 200
@@ -307,4 +315,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                
+    
