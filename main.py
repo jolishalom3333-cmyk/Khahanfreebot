@@ -162,8 +162,11 @@ def send_custom_msg(message):
         bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
 
 # --- 4. WEBHOOK NHẬN ĐƠN HÀNG HOÀN TIỀN TỪ ADPIA ---
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET', 'POST', 'HEAD'])
 def webhook():
+    if request.method == 'HEAD':
+        return "", 200
+
     target_id = request.args.get('sub_id') or request.args.get('subid') or request.args.get('utm_source')
     comm_str = request.args.get('commission') or request.args.get('comm') or request.args.get('money')
     status = request.args.get('status') or request.args.get('state') or 'success'
@@ -261,4 +264,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                    
+    
