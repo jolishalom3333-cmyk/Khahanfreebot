@@ -280,17 +280,29 @@ def webhook():
     return "OK", 200
 
 # --- 5. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
+import time
+
 def run_bot():
     if not bot:
         print("❌ Chưa có TOKEN Bot.")
         return
     print("🤖 Bot Telegram đang bắt đầu Polling...")
+    
+    # Xóa Webhook cũ để tránh bị xung đột 409 Conflict
     try:
-        bot.infinity_polling(skip_pending=True)
+        bot.remove_webhook()
     except Exception as e:
-        print(f"❌ Lỗi Bot Polling: {e}")
+        print(f"Cảnh báo xóa webhook: {e}")
 
-# Tự động chạy Bot Thread ngay khi ứng dụng khởi chạy
+    # Vòng lặp tự động kết nối lại nếu bị ngắt mạng
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
+            time.sleep(5)
+
+# Tự động chạy Bot Thread
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
