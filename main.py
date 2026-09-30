@@ -211,7 +211,7 @@ def webhook():
         try:
             target_id = str(target_id).strip()
             total_comm = float(comm_str)
-            cashback = int(total_comm * 0.60)
+            cashback = int(total_comm * 0.90)
             admin_profit = int(total_comm - cashback)
             status_clean = str(status).lower().strip()
 
