@@ -243,8 +243,8 @@ def webhook():
                             f"🔻 **BÁO CÓ ĐƠN HÀNG BỊ HỦY!**\n\n"
                             f"👤 ID Khách: `{target_id}`\n"
                             f"📦 Mã đơn: `{order_id}`\n"
-                            f"🔻 Trừ hoàn khách (60%): -{cashback:,.0f} VNĐ\n"
-                            f"🔻 Lợi nhuận Admin giảm (40%): -{admin_profit:,.0f} VNĐ",
+                            f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ\n"
+                            f"🔻 Lợi nhuận Admin giảm (10%): -{admin_profit:,.0f} VNĐ",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
@@ -261,7 +261,7 @@ def webhook():
                         target_id, 
                         f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
                         f"📦 Mã đơn: `{order_id}`\n"
-                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** (60% hoa hồng) vào ví tích lũy!",
+                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** (90% hoa hồng) vào ví tích lũy!",
                         parse_mode="Markdown"
                     )
                 except Exception as e:
@@ -279,8 +279,8 @@ def webhook():
                             f"🆔 ID Khách: `{target_id}`\n"
                             f"📦 Mã đơn: `{order_id}`\n"
                             f"💰 Hoa hồng Adpia: {int(total_comm):,} VNĐ\n"
-                            f"🎁 Hoàn cho khách (60%): +{cashback:,.0f} VNĐ\n"
-                            f"💵 Lợi nhuận Admin (40%): +{admin_profit:,.0f} VNĐ",
+                            f"🎁 Hoàn cho khách (90%): +{cashback:,.0f} VNĐ\n"
+                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
