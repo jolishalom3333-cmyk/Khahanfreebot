@@ -151,7 +151,7 @@ if bot:
         except Exception:
             bot.reply_to(message, "⚠️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
 
-        @bot.message_handler(commands=['danhsach'])
+    @bot.message_handler(commands=['danhsach'])
     def list_users(message):
         if str(message.from_user.id) != str(ADMIN_ID): return
         try:
@@ -164,14 +164,13 @@ if bot:
                 bot.reply_to(message, "📂 Chưa có khách hàng nào.")
                 return
 
-            msg = "📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ:</b>\n\n"
+            msg = "📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ (90%):</b>\n\n"
             for info in users:
                 uid = info['id']
                 name = info.get("name", "Khách hàng")
                 username = f"(@{info['username']})" if info.get("username") else ""
                 balance = info.get("balance", 0)
                 
-                # Hiển thị Tên có link bấm trực tiếp + ID copy nhanh + Số dư
                 msg += f"👤 <b><a href='tg://user?id={uid}'>{name}</a></b> {username}\n"
                 msg += f"🆔 ID: <code>{uid}</code>\n"
                 msg += f"💰 Số dư: <b>{balance:,.0f} VNĐ</b>\n"
