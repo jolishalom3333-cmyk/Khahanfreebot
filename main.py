@@ -12,14 +12,14 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Cấu hình RioHub (TikTok)
-RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', 'rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a').strip()
-RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', 'whsec_71d8bc4fd96cc00782fd0649516a6dcc618105ae99c9e4e9').strip()
+# Lấy cấu hình RioHub từ Render Environment Variables
+RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
+RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# Kết nối CSDL Supabase an toàn & Lưu lỗi chi tiết
+# Kết nối CSDL Supabase
 supabase_error = ""
 supabase = None
 
@@ -40,6 +40,9 @@ else:
 
 # --- HÀM TẠO LINK TIKTOK BẰNG RIOHUB API ---
 def create_riohub_tiktok_link(url, user_id):
+    if not RIOHUB_API_KEY:
+        print("❌ Thiếu RIOHUB_API_KEY trên Render Environment")
+        return None
     try:
         headers = {
             "X-API-KEY": RIOHUB_API_KEY,
@@ -145,7 +148,6 @@ if bot:
         
         # PHÂN LOẠI SÀN
         if "tiktok" in raw_url.lower():
-            # TIKTOK -> TẠO LINK QUA RIOHUB (HOÀN TIỀN 100% TỪ MCN)
             rio_link = create_riohub_tiktok_link(raw_url, uid)
             if rio_link:
                 bot.reply_to(
@@ -156,7 +158,6 @@ if bot:
             else:
                 bot.reply_to(message, "❌ Tạo link TikTok thất bại. Vui lòng kiểm tra lại đường dẫn sản phẩm!")
         else:
-            # SHOPEE -> TẠO LINK QUA ADPIA NHƯ CŨ
             encoded_url = quote(raw_url, safe='')
             merchant = "shopee"
             link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
@@ -259,7 +260,6 @@ def webhook():
             old_bal = user.get("balance", 0) if user else 0
             old_orders = user.get("orders", []) if user else []
 
-            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG
             if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
                 new_bal = max(0, old_bal - cashback)
                 old_orders.append(f"❌ Shopee Hủy/Hoàn #{order_id}: -{cashback:,.0f} VNĐ")
@@ -289,8 +289,6 @@ def webhook():
                         )
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn Admin: {e}")
-
-            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG
             else:
                 new_bal = old_bal + cashback
                 old_orders.append(f"🛒 Shopee Hoàn tiền #{order_id}: +{cashback:,.0f} VNĐ")
@@ -359,7 +357,6 @@ def tiktok_webhook():
         old_bal = user.get("balance", 0) if user else 0
         old_orders = user.get("orders", []) if user else []
 
-        # XỬ LÝ HỦY / TRẢ HÀNG TIKTOK
         if event in ["order.refunded", "order.cancelled", "cancelled", "refunded"]:
             new_bal = max(0, old_bal - cashback)
             old_orders.append(f"❌ TikTok Hủy/Hoàn #{order_id}: -{cashback:,.0f} VNĐ")
@@ -391,8 +388,6 @@ def tiktok_webhook():
                         )
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn Admin: {e}")
-
-        # XỬ LÝ ĐƠN TIKTOK MỚI HOẶC CẬP NHẬT SUCCESS
         else:
             new_bal = old_bal + cashback
             old_orders.append(f"🎵 TikTok Hoàn tiền #{order_id}: +{cashback:,.0f} VNĐ")
@@ -458,4 +453,5 @@ threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", 
+    app.run(host="0.0.0.0", port=port)
+                
