@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 import time
 from urllib.parse import quote
@@ -6,15 +7,16 @@ from flask import Flask, request, jsonify
 import requests
 import telebot
 
-# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
+# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & KHÓA BẢO MẬT ---
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Lấy cấu hình RioHub từ Render Environment Variables
-RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
-RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
+# Cấu hình RioHub (TikTok)
+RIOHUB_API_KEY = (os.environ.get('RIOHUB_API_KEY') or 'rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a').strip()
+RIOHUB_SIGNING_SECRET = (os.environ.get('RIOHUB_SIGNING_SECRET') or 'whsec_' + '71d8bc4fd96cc00782fd0649516a6dcc618105ae99c9e4e9').strip()
+TIKTOK_CREATOR = "pheejzoo1564"
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
@@ -38,30 +40,53 @@ else:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
 
-# --- HÀM TẠO LINK TIKTOK BẰNG RIOHUB API ---
-def create_riohub_tiktok_link(url, user_id):
-    if not RIOHUB_API_KEY:
-        print("❌ Thiếu RIOHUB_API_KEY trên Render Environment")
+# --- HÀM TẠO LINK TIKTOK BẰNG RIOHUB API (CHUẨN CHÍNH THỨC) ---
+def create_riohub_tiktok_link(raw_text, user_id):
+    # 1. Tách riêng đường dẫn URL từ tin nhắn (nếu có dính tên sản phẩm)
+    url_match = re.search(r'https?://[^\s]+', raw_text)
+    if not url_match:
         return None
-    try:
-        headers = {
-            "X-API-KEY": RIOHUB_API_KEY,
-            "Authorization": f"Bearer {RIOHUB_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "url": url,
+    clean_url = url_match.group(0)
+
+    headers = {
+        "X-Riohub-Api-Key": RIOHUB_API_KEY,
+        "X-API-KEY": RIOHUB_API_KEY,
+        "Authorization": f"Bearer {RIOHUB_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # Danh sách Endpoint API RioHub theo tài liệu chính thức
+    endpoints = [
+        ("https://riohub.vn/api/v1/partner/tiktok/affiliate/links", {
+            "creator_username": TIKTOK_CREATOR,
+            "product_url": clean_url,
             "sub_id": str(user_id)
-        }
-        res = requests.post("https://api.riohub.vn/v1/tools/convert-link", json=payload, headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("success") and "data" in data:
-                return data["data"].get("short_link") or data["data"].get("affiliate_link") or data["data"].get("url")
-            elif "short_link" in data:
-                return data["short_link"]
-    except Exception as e:
-        print(f"❌ Lỗi gọi API RioHub: {e}")
+        }),
+        ("https://riohub.vn/api/v1/partner/tiktok/affiliate/links", {
+            "product_url": clean_url,
+            "sub_id": str(user_id)
+        }),
+        ("https://api.riohub.vn/v1/tools/convert-link", {
+            "url": clean_url,
+            "sub_id": str(user_id)
+        })
+    ]
+
+    for ep_url, payload in endpoints:
+        try:
+            res = requests.post(ep_url, json=payload, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                link = data.get("affiliate_link") or data.get("short_link") or data.get("url")
+                if not link and isinstance(data.get("data"), dict):
+                    link = data["data"].get("affiliate_link") or data["data"].get("short_link") or data["data"].get("url")
+                if link:
+                    return link
+            else:
+                print(f"❌ API RioHub Error {res.status_code} ({ep_url}): {res.text}")
+        except Exception as e:
+            print(f"❌ Lỗi kết nối RioHub ({ep_url}): {e}")
+
     return None
 
 # --- 2. HÀM ĐỌC / GHI DỮ LIỆU TỪ SUPABASE ---
@@ -141,14 +166,18 @@ if bot:
         bal = user.get("balance", 0) if user else 0
         bot.reply_to(message, f"💳 **Số dư tích lũy:** {bal:,.0f} VNĐ", parse_mode="Markdown")
 
-    @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
+    @bot.message_handler(func=lambda msg: msg.text is not None and "http" in msg.text)
     def convert_link(message):
         uid = message.from_user.id
-        raw_url = message.text.strip()
+        raw_text = message.text.strip()
         
+        # Tách lấy riêng link URL
+        url_match = re.search(r'https?://[^\s]+', raw_text)
+        clean_url = url_match.group(0) if url_match else raw_text
+
         # PHÂN LOẠI SÀN
-        if "tiktok" in raw_url.lower():
-            rio_link = create_riohub_tiktok_link(raw_url, uid)
+        if "tiktok" in clean_url.lower():
+            rio_link = create_riohub_tiktok_link(raw_text, uid)
             if rio_link:
                 bot.reply_to(
                     message, 
@@ -158,7 +187,7 @@ if bot:
             else:
                 bot.reply_to(message, "❌ Tạo link TikTok thất bại. Vui lòng kiểm tra lại đường dẫn sản phẩm!")
         else:
-            encoded_url = quote(raw_url, safe='')
+            encoded_url = quote(clean_url, safe='')
             merchant = "shopee"
             link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
             bot.reply_to(
@@ -425,33 +454,4 @@ def tiktok_webhook():
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn Admin: {e}")
 
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        print(f"❌ Lỗi xử lý TikTok Postback: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- 6. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
-def run_bot():
-    if not bot:
-        print("❌ Chưa có TOKEN Bot.")
-        return
-    print("🤖 Bot Telegram đang bắt đầu Polling...")
-    
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        print(f"Cảnh báo xóa webhook: {e}")
-
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
-        except Exception as e:
-            print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
-            time.sleep(5)
-
-threading.Thread(target=run_bot, daemon=True).start()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-                
+        return jsonify({"sta
