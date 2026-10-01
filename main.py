@@ -13,7 +13,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Đọc cấu hình RioHub từ Render Environment
+# Cấu hình RioHub (Đọc hoàn toàn từ Environment)
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
 TIKTOK_CREATOR = os.environ.get('TIKTOK_CREATOR', 'pheejzoo1564').strip()
@@ -47,12 +47,14 @@ def create_riohub_tiktok_link(raw_text, user_id):
         return None
     clean_url = url_match.group(0)
 
-    api_key = RIOHUB_API_KEY or "rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a"
+    if not RIOHUB_API_KEY:
+        print("❌ Thiếu RIOHUB_API_KEY trên Render Environment")
+        return None
 
     headers = {
-        "X-Riohub-Api-Key": api_key,
-        "X-API-KEY": api_key,
-        "Authorization": f"Bearer {api_key}",
+        "X-Riohub-Api-Key": RIOHUB_API_KEY,
+        "X-API-KEY": RIOHUB_API_KEY,
+        "Authorization": f"Bearer {RIOHUB_API_KEY}",
         "Content-Type": "application/json"
     }
     
@@ -190,7 +192,7 @@ if bot:
             link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
             bot.reply_to(
                 message, 
-                f"🛍️️ <a href='{link_adpia}'><b>LINK SHOPEE HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", 
+                f"🛍️ <a href='{link_adpia}'><b>LINK SHOPEE HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", 
                 parse_mode="HTML"
             )
 
@@ -217,7 +219,7 @@ if bot:
             except Exception:
                 pass
         except Exception:
-            bot.reply_to(message, "⚠️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
 
     @bot.message_handler(commands=['danhsach'])
     def list_users(message):
@@ -456,6 +458,4 @@ def tiktok_webhook():
         print(f"❌ Lỗi xử lý TikTok Postback: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- 6. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
-def run_bot():
-    
+# --- 6. KHỞI CHẠY BACK
