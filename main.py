@@ -7,16 +7,16 @@ from flask import Flask, request, jsonify
 import requests
 import telebot
 
-# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & KHÓA BẢO MẬT ---
+# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Cấu hình RioHub (TikTok)
-RIOHUB_API_KEY = (os.environ.get('RIOHUB_API_KEY') or 'rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a').strip()
-RIOHUB_SIGNING_SECRET = (os.environ.get('RIOHUB_SIGNING_SECRET') or 'whsec_' + '71d8bc4fd96cc00782fd0649516a6dcc618105ae99c9e4e9').strip()
-TIKTOK_CREATOR = "pheejzoo1564"
+# Đọc cấu hình RioHub từ Render Environment
+RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
+RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
+TIKTOK_CREATOR = os.environ.get('TIKTOK_CREATOR', 'pheejzoo1564').strip()
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
@@ -40,22 +40,22 @@ else:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
 
-# --- HÀM TẠO LINK TIKTOK BẰNG RIOHUB API (CHUẨN CHÍNH THỨC) ---
+# --- HÀM TẠO LINK TIKTOK BẰNG RIOHUB API ---
 def create_riohub_tiktok_link(raw_text, user_id):
-    # 1. Tách riêng đường dẫn URL từ tin nhắn (nếu có dính tên sản phẩm)
     url_match = re.search(r'https?://[^\s]+', raw_text)
     if not url_match:
         return None
     clean_url = url_match.group(0)
 
+    api_key = RIOHUB_API_KEY or "rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a"
+
     headers = {
-        "X-Riohub-Api-Key": RIOHUB_API_KEY,
-        "X-API-KEY": RIOHUB_API_KEY,
-        "Authorization": f"Bearer {RIOHUB_API_KEY}",
+        "X-Riohub-Api-Key": api_key,
+        "X-API-KEY": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    # Danh sách Endpoint API RioHub theo tài liệu chính thức
     endpoints = [
         ("https://riohub.vn/api/v1/partner/tiktok/affiliate/links", {
             "creator_username": TIKTOK_CREATOR,
@@ -171,11 +171,9 @@ if bot:
         uid = message.from_user.id
         raw_text = message.text.strip()
         
-        # Tách lấy riêng link URL
         url_match = re.search(r'https?://[^\s]+', raw_text)
         clean_url = url_match.group(0) if url_match else raw_text
 
-        # PHÂN LOẠI SÀN
         if "tiktok" in clean_url.lower():
             rio_link = create_riohub_tiktok_link(raw_text, uid)
             if rio_link:
@@ -192,11 +190,10 @@ if bot:
             link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
             bot.reply_to(
                 message, 
-                f"🛍️ <a href='{link_adpia}'><b>LINK SHOPEE HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", 
+                f"🛍️️ <a href='{link_adpia}'><b>LINK SHOPEE HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", 
                 parse_mode="HTML"
             )
 
-    # --- LỆNH ADMIN ---
     @bot.message_handler(commands=['congtien'])
     def cong_tien(message):
         if str(message.from_user.id) != str(ADMIN_ID): return
@@ -454,4 +451,11 @@ def tiktok_webhook():
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn Admin: {e}")
 
-        return jsonify({"sta
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        print(f"❌ Lỗi xử lý TikTok Postback: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- 6. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
+def run_bot():
+    
