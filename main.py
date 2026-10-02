@@ -13,7 +13,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Cấu hình RioHub (Đọc hoàn toàn từ Environment)
+# Cấu hình RioHub (Đọc từ Environment)
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
 TIKTOK_CREATOR = os.environ.get('TIKTOK_CREATOR', 'pheejzoo1564').strip()
@@ -219,7 +219,7 @@ if bot:
             except Exception:
                 pass
         except Exception:
-            bot.reply_to(message, "⚠️️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
 
     @bot.message_handler(commands=['danhsach'])
     def list_users(message):
@@ -458,4 +458,4 @@ def tiktok_webhook():
         print(f"❌ Lỗi xử lý TikTok Postback: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- 6. KHỞI CHẠY BACK
+# --- 6. KHỞI CHẠY BACKGROUND BOT 
