@@ -1,25 +1,38 @@
 import os
 import re
-import threading
-import time
 from urllib.parse import quote
 from flask import Flask, request, jsonify
 import requests
 import telebot
 
 # --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
-ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN') or ""
+TOKEN = TOKEN.strip("[]'\" ")
 
-# Cấu hình RioHub (Đọc từ Environment)
-RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
-RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
-TIKTOK_CREATOR = os.environ.get('TIKTOK_CREATOR', 'pheejzoo1564').strip()
+ADMIN_ID = os.environ.get('ADMIN_ID', '8860640969').strip("[]'\" ")
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip("[]'\" ")
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip("[]'\" ")
+
+RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip("[]'\" ")
+RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip("[]'\" ")
+TIKTOK_CREATOR = os.environ.get('TIKTOK_CREATOR', 'pheejzoo1564').strip("[]'\" ")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
+
+# --- TỰ ĐỘNG CÀI ĐẶT WEBHOOK CHO TELEGRAM BOT ---
+RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL', '').strip("[]'\" ")
+if not RENDER_EXTERNAL_URL:
+    RENDER_EXTERNAL_URL = "https://khahanfreebot.onrender.com"
+
+if bot and TOKEN:
+    try:
+        webhook_url = f"{RENDER_EXTERNAL_URL}/telegram-webhook"
+        bot.remove_webhook()
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Đã kích hoạt Telegram Webhook: {webhook_url}")
+    except Exception as e:
+        print(f"⚠️ Cảnh báo thiết lập Webhook Telegram: {e}")
 
 # Kết nối CSDL Supabase
 supabase_error = ""
@@ -32,9 +45,7 @@ elif not SUPABASE_KEY:
 else:
     try:
         from supabase import create_client
-        clean_url = SUPABASE_URL.strip("[]'\" ")
-        clean_key = SUPABASE_KEY.strip("[]'\" ")
-        supabase = create_client(clean_url, clean_key)
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         print("✅ Kết nối Supabase thành công!")
     except Exception as e:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
@@ -47,14 +58,12 @@ def create_riohub_tiktok_link(raw_text, user_id):
         return None
     clean_url = url_match.group(0)
 
-    if not RIOHUB_API_KEY:
-        print("❌ Thiếu RIOHUB_API_KEY trên Render Environment")
-        return None
+    api_key = RIOHUB_API_KEY or "rhk_567d9c91872f7dacbd60bad98e282caf17d83f81cc513a1a"
 
     headers = {
-        "X-Riohub-Api-Key": RIOHUB_API_KEY,
-        "X-API-KEY": RIOHUB_API_KEY,
-        "Authorization": f"Bearer {RIOHUB_API_KEY}",
+        "X-Riohub-Api-Key": api_key,
+        "X-API-KEY": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
@@ -131,7 +140,23 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
     except Exception as e:
         print("Lỗi ghi dữ liệu Supabase:", e)
 
-# --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
+# --- 3. CỔNG NHẬN TIN NHẮN TELEGRAM QUA WEBHOOK ---
+@app.route('/telegram-webhook', methods=['POST'])
+def telegram_webhook():
+    if not bot:
+        return "Bot non-initialized", 500
+    try:
+        if request.headers.get('content-type') == 'application/json':
+            json_string = request.get_data().decode('utf-8')
+            update = telebot.types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+            return '', 200
+        return 'Invalid content-type', 400
+    except Exception as e:
+        print(f"❌ Lỗi xử lý Telegram Webhook: {e}")
+        return 'Error', 500
+
+# --- CÁC HÀM XỬ LÝ LỆNH BOT ---
 if bot:
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
@@ -437,25 +462,4 @@ def tiktok_webhook():
                 if ADMIN_ID:
                     try:
                         client_name = user.get("name", "Khách hàng") if user else "Khách hàng"
-                        client_link = f"tg://user?id={target_id}"
-
-                        bot.send_message(
-                            ADMIN_ID,
-                            f"🔔 *CÓ ĐƠN HÀNG TIKTOK MỚI (RIOHUB)!*\n\n"
-                            f"👤 *Khách hàng:* [{client_name}]({client_link})\n"
-                            f"🆔 ID Khách: `{target_id}`\n"
-                            f"📦 Mã đơn: `{order_id}`\n"
-                            f"💰 Hoa hồng RioHub: {int(total_comm):,} VNĐ\n"
-                            f"🎁 Hoàn cho khách (90%): +{cashback:,.0f} VNĐ\n"
-                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ",
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        print(f"Lỗi gửi tin nhắn Admin: {e}")
-
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        print(f"❌ Lỗi xử lý TikTok Postback: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- 6. KHỞI CHẠY BACKGROUND BOT 
+                        client_link = f"
