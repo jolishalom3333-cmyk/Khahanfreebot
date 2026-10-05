@@ -15,9 +15,12 @@ ADMIN_ID = (os.environ.get('ADMIN_ID') or '8860640969').strip("[]'\" ")
 SUPABASE_URL = (os.environ.get('SUPABASE_URL') or '').strip("[]'\" ")
 SUPABASE_KEY = (os.environ.get('SUPABASE_KEY') or '').strip("[]'\" ")
 
-# Cấu hình ACCESSTRADE API Key chính chủ của bạn
-ACCESSTRADE_API_KEY = (os.environ.get('ACCESSTRADE_API_KEY') or 'mC9R_6IaprMxC1AO1GJfa37zL4QiRjzo').strip("[]'\" ")
-DEEPLINK_API_URL = "https://api.accesstrade.vn/v1/deeplinks"
+# Cấu hình Ecomobi API Token chính chủ của bạn[span_0](start_span)[span_0](end_span)
+ECOMOBI_TOKEN = (os.environ.get('ECOMOBI_TOKEN') or 'jfnQUZAdZRcBuBSsjQnLa').strip("[]'\" ")
+ECOMOBI_TOKEN_PRIVATE = (os.environ.get('ECOMOBI_TOKEN_PRIVATE') or 'DaYganWMPCfmeHHYBIldQ').strip("[]'\" ")
+
+# Endpoint mẫu gọi Deeplink hoặc Postback của Ecomobi (Bạn có thể điều chỉnh đường dẫn endpoint deeplink theo tài liệu của Ecomobi cung cấp)
+DEEPLINK_API_URL = "https://api.ecotrackings.com/api/v3/deeplink"  # Hoặc đường dẫn tạo link rút gọn theo tài liệu Ecomobi
 
 # --- KHỞI TẠO BOT & DATABASE ---
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -66,30 +69,31 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
     except Exception as e:
         print("Lỗi save_user:", e)
 
-# --- HÀM TẠO DEEPLINK BẰNG ACCESSTRADE API (DÙNG CHUNG CHO SHOPEE & TIKTOK) ---
-def create_accesstrade_deeplink(clean_url, user_id):
+# --- HÀM TẠO DEEPLINK BẰNG ECOMOBI API (DÙNG CHUNG CHO SHOPEE & TIKTOK) ---
+def create_ecomobi_deeplink(clean_url, user_id):
     headers = {
-        "Authorization": f"Token {ACCESSTRADE_API_KEY}",
+        "Authorization": f"Bearer {ECOMOBI_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
-        "urls": [clean_url],
-        "utm_source": str(user_id)  # Gắn ID khách hàng để nhận diện lúc postback trả về
+        "url": clean_url,
+        "sub_id": str(user_id)  # Gắn ID khách hàng để nhận diện lúc postback trả về
     }
     try:
         res = requests.post(DEEPLINK_API_URL, json=payload, headers=headers, timeout=8)
         if res.status_code == 200:
             data = res.json()
-            if data.get("result") and len(data["result"]["success"]) > 0:
-                return data["result"]["success"][0]["short_link"]
+            # Tùy thuộc vào cấu trúc json trả về của Ecomobi (ví dụ data.get("data") hoặc data.get("short_link"))
+            if data.get("success") or data.get("short_link"):
+                return data.get("short_link") or data.get("data", {}).get("short_link")
     except Exception as e:
-        print("❌ Lỗi API ACCESSTRADE Deeplink:", e)
+        print("❌ Lỗi API Ecomobi Deeplink:", e)
     return None
 
 # --- SERVER FLASK ROUTE ---
 @app.route('/', methods=['GET', 'HEAD', 'POST'])
 def index():
-    return "Bot ACCESSTRADE đang chạy bình thường!", 200
+    return "Bot Ecomobi đang chạy bình thường!", 200
 
 # --- LOGIC XỬ LÝ LỆNH BOT ---
 if bot:
@@ -135,14 +139,14 @@ if bot:
         clean_url = url_match.group(0) if url_match else raw_text
 
         if "tiktok" in clean_url.lower() or "shopee" in clean_url.lower() or "shp.ee" in clean_url.lower() or "vt.tiktok" in clean_url.lower():
-            at_link = create_accesstrade_deeplink(clean_url, uid)
+            at_link = create_ecomobi_deeplink(clean_url, uid)
             platform_name = "TIKTOK SHOP" if "tiktok" in clean_url.lower() or "vt.tiktok" in clean_url.lower() else "SHOPEE"
             if at_link:
                 bot.reply_to(message, f"🛒 <a href='{at_link}'><b>LINK {platform_name} HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{at_link}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
             else:
                 bot.reply_to(message, f"❌ Tạo link {platform_name} thất bại. Vui lòng kiểm tra lại đường dẫn sản phẩm!")
         else:
-            bot.reply_to(message, "⚠️️ Bot hiện hỗ trợ tạo link hoàn tiền cho **Shopee** và **TikTok Shop**.", parse_mode="Markdown")
+            bot.reply_to(message, "⚠ Bot hiện hỗ trợ tạo link hoàn tiền cho **Shopee** và **TikTok Shop**.", parse_mode="Markdown")
 
     @bot.message_handler(commands=['congtien'])
     def cong_tien(message):
@@ -193,12 +197,12 @@ if bot:
         except Exception:
             bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
 
-# --- POSTBACK ENDPOINT NHẬN ĐƠN TỪ ACCESSTRADE ---
+# --- POSTBACK ENDPOINT NHẬN ĐƠN TỪ ECOMOBI ---
 @app.route('/postback', methods=['GET', 'POST'])
-def postback_accesstrade():
-    """Nhận postback chung từ ACCESSTRADE, tự động tính 90% cho khách, 10% cho bạn"""
-    target_id = request.args.get('utm_source') or request.args.get('sub_id')
-    comm_str = request.args.get('pub_commission') or request.args.get('commission')
+def postback_ecomobi():
+    """Nhận postback chung từ Ecomobi, tự động tính 90% cho khách, 10% cho bạn"""
+    target_id = request.args.get('sub_id') or request.args.get('utm_source')
+    comm_str = request.args.get('commission') or request.args.get('pub_commission')
     status = request.args.get('status') or '1'
     order_id = request.args.get('order_id') or 'Mới'
 
@@ -236,7 +240,7 @@ def postback_accesstrade():
                     parse_mode="Markdown"
                 )
         except Exception as e:
-            print("Lỗi Postback ACCESSTRADE:", e)
+            print("Lỗi Postback Ecomobi:", e)
     return "OK", 200
 
 # --- KHỞI CHẠY POLLING Ở LUỒNG NGẦM ---
@@ -261,4 +265,4 @@ if bot:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-                                
+    
