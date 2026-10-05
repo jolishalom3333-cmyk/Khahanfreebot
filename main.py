@@ -15,12 +15,9 @@ ADMIN_ID = (os.environ.get('ADMIN_ID') or '8860640969').strip("[]'\" ")
 SUPABASE_URL = (os.environ.get('SUPABASE_URL') or '').strip("[]'\" ")
 SUPABASE_KEY = (os.environ.get('SUPABASE_KEY') or '').strip("[]'\" ")
 
-# Cấu hình Ecomobi API Token chính chủ của bạn[span_0](start_span)[span_0](end_span)
+# Cấu hình Ecomobi API Token chính chủ
 ECOMOBI_TOKEN = (os.environ.get('ECOMOBI_TOKEN') or 'jfnQUZAdZRcBuBSsjQnLa').strip("[]'\" ")
 ECOMOBI_TOKEN_PRIVATE = (os.environ.get('ECOMOBI_TOKEN_PRIVATE') or 'DaYganWMPCfmeHHYBIldQ').strip("[]'\" ")
-
-# Endpoint mẫu gọi Deeplink hoặc Postback của Ecomobi (Bạn có thể điều chỉnh đường dẫn endpoint deeplink theo tài liệu của Ecomobi cung cấp)
-DEEPLINK_API_URL = "https://api.ecotrackings.com/api/v3/deeplink"  # Hoặc đường dẫn tạo link rút gọn theo tài liệu Ecomobi
 
 # --- KHỞI TẠO BOT & DATABASE ---
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -80,12 +77,11 @@ def create_ecomobi_deeplink(clean_url, user_id):
         "sub_id": str(user_id)  # Gắn ID khách hàng để nhận diện lúc postback trả về
     }
     try:
-        res = requests.post(DEEPLINK_API_URL, json=payload, headers=headers, timeout=8)
+        res = requests.post("https://api.ecotrackings.com/api/v3/deeplink", json=payload, headers=headers, timeout=8)
         if res.status_code == 200:
             data = res.json()
-            # Tùy thuộc vào cấu trúc json trả về của Ecomobi (ví dụ data.get("data") hoặc data.get("short_link"))
-            if data.get("success") or data.get("short_link"):
-                return data.get("short_link") or data.get("data", {}).get("short_link")
+            if data.get("success") or data.get("short_link") or data.get("data"):
+                return data.get("short_link") or data.get("data", {}).get("short_link") or data.get("url")
     except Exception as e:
         print("❌ Lỗi API Ecomobi Deeplink:", e)
     return None
