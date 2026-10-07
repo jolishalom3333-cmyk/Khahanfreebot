@@ -1,17 +1,17 @@
 import os
-import threading
-import time
+import requests
 from urllib.parse import quote
 from flask import Flask, request
-import telebot
 
 # --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-bot = telebot.TeleBot(TOKEN) if TOKEN else None
+# Thông tin cấu hình Facebook Messenger API
+PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN', '') # Lấy từ Meta for Developers
+VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'nhungothilien_token')
+
 app = Flask(__name__)
 
 # Kết nối CSDL Supabase an toàn & Lưu lỗi chi tiết
@@ -32,6 +32,22 @@ else:
     except Exception as e:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
+
+# --- HÀM GỬI TIN NHẮN QUA FACEBOOK MESSENGER ---
+def send_fb_message(recipient_id, text_message):
+    if not PAGE_ACCESS_TOKEN:
+        print("⚠️ Chưa có PAGE_ACCESS_TOKEN để gửi tin nhắn Facebook.")
+        return
+    url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {"text": text_message}
+    }
+    try:
+        response = requests.post(url, json=payload)
+        return response.json()
+    except Exception as e:
+        print("Lỗi gửi tin nhắn Facebook:", e)
 
 # --- 2. HÀM ĐỌC / GHI DỮ LIỆU TỪ SUPABASE ---
 def get_user(user_id):
@@ -73,140 +89,97 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
     except Exception as e:
         print("Lỗi ghi dữ liệu Supabase:", e)
 
-# --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
-if bot:
-    @bot.message_handler(commands=['start'])
-    def send_welcome(message):
-        uid = str(message.chat.id)
-        first_name = message.from_user.first_name or "Khách"
-        username = message.from_user.username or ""
 
-        user = get_user(uid)
-        if not user:
-            save_or_update_user(uid, name=first_name, username=username, balance=0, orders=[])
-        else:
-            save_or_update_user(uid, name=first_name, username=username)
-
-        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📦 Đơn hàng của tôi", "💳 Ví & Số dư")
-        bot.reply_to(message, f"👋 Chào mừng {first_name}! Hãy gửi link Shopee/TikTok để mua hàng hoàn tiền.", reply_markup=markup)
-
-    @bot.message_handler(func=lambda msg: msg.text == "📦 Đơn hàng của tôi")
-    def my_orders(message):
-        uid = str(message.from_user.id)
-        user = get_user(uid)
-        orders = user.get("orders", []) if user else []
-        if not orders:
-            bot.reply_to(message, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
-        else:
-            recent = orders[-10:]
-            msg_text = "📦 **LỊCH SỬ ĐƠN HÀNG:**\n\n" + "\n".join([f"• {item}" for item in recent])
-            bot.reply_to(message, msg_text, parse_mode="Markdown")
-
-    @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
-    def my_balance(message):
-        uid = str(message.from_user.id)
-        user = get_user(uid)
-        bal = user.get("balance", 0) if user else 0
-        bot.reply_to(message, f"💳 **Số dư tích lũy:** {bal:,.0f} VNĐ", parse_mode="Markdown")
-
-    @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
-    def convert_link(message):
-        uid = message.from_user.id
-        raw_url = message.text.strip()
-        encoded_url = quote(raw_url, safe='')
-        
-        # TỰ ĐỘNG PHÂN LOẠI MERCHANT TƯƠNG ỨNG MỖI SÀN
-        if "tiktok" in raw_url.lower():
-            merchant = "tiktoksharelink"
-        else:
-            merchant = "shopee"
-
-        link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
-        bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
-
-    # --- LỆNH ADMIN ---
-    @bot.message_handler(commands=['congtien'])
-    def cong_tien(message):
-        if str(message.from_user.id) != str(ADMIN_ID): return
-        try:
-            parts = message.text.split()
-            target_id = parts[1]
-            amount = int(parts[2])
-            
-            user = get_user(target_id)
-            old_bal = user.get("balance", 0) if user else 0
-            old_orders = user.get("orders", []) if user else []
-            
-            new_bal = old_bal + amount
-            order_entry = f"➕ Admin cộng tay: +{amount:,.0f} VNĐ"
-            old_orders.append(order_entry)
-            
-            save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-            bot.reply_to(message, f"✅ Đã cộng {amount:,.0f} VNĐ cho ID {target_id}")
-            try:
-                bot.send_message(target_id, f"🎉 Bạn vừa được Admin cộng +{amount:,.0f} VNĐ vào ví tích lũy!")
-            except Exception:
-                pass
-        except Exception:
-            bot.reply_to(message, "⚠️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
-
-    @bot.message_handler(commands=['danhsach'])
-    def list_users(message):
-        if str(message.from_user.id) != str(ADMIN_ID): return
-        try:
-            if not supabase:
-                bot.reply_to(message, f"❌ Chưa kết nối Supabase thành công!\n\n👉 <b>Lý do:</b> {supabase_error}", parse_mode="HTML")
-                return
-            res = supabase.table('users').select('*').execute()
-            users = res.data
-            if not users:
-                bot.reply_to(message, "📂 Chưa có khách hàng nào.")
-                return
-
-            msg = "📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ (90%):</b>\n\n"
-            for info in users:
-                uid = info['id']
-                name = info.get("name", "Khách hàng")
-                username = f"(@{info['username']})" if info.get("username") else ""
-                balance = info.get("balance", 0)
-                
-                msg += f"👤 <b><a href='tg://user?id={uid}'>{name}</a></b> {username}\n"
-                msg += f"🆔 ID: <code>{uid}</code>\n"
-                msg += f"💰 Số dư: <b>{balance:,.0f} VNĐ</b>\n"
-                msg += f"👉 Nhắn nhanh: <code>/nhan {uid} Nội dung</code>\n"
-                msg += "-------------------------------\n"
-
-            bot.send_message(ADMIN_ID, msg, parse_mode="HTML")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Lỗi: {e}")
-
-    @bot.message_handler(commands=['nhan'])
-    def send_custom_msg(message):
-        if str(message.from_user.id) != str(ADMIN_ID): return
-        try:
-            p = message.text.split(" ", 2)
-            bot.send_message(p[1], f"💬 **Lời nhắn từ Admin:**\n\n{p[2]}", parse_mode="Markdown")
-            bot.reply_to(message, "✅ Đã gửi tin nhắn thành công!")
-        except Exception:
-            bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
-
-# --- 4. WEBHOOK NHẬN ĐƠN HÀNG HOÀN TIỀN TỪ ADPIA & HEALTH CHECK ---
+# --- 3. WEBHOOK TỔNG HỢP: NHẬN TIN NHẮN FACEBOOK & POSTBACK ADPIA ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
-@app.route('/postback', methods=['GET', 'POST', 'HEAD'])
-def webhook():
+def main_webhook():
     if request.method == 'HEAD':
         return "", 200
 
+    # A. XỬ LÝ XÁC THỰC VÀ NHẬN TIN NHẮN TỪ FACEBOOK MESSENGER (GET / POST kèm hub.mode)
+    if request.args.get('hub.mode') == 'subscribe' or request.is_json:
+        # Xác thực Webhook với Facebook
+        if request.method == 'GET':
+            mode = request.args.get("hub.mode")
+            token = request.args.get("hub.verify_token")
+            challenge = request.args.get("hub.challenge")
+            if mode == "subscribe" and token == VERIFY_TOKEN:
+                return challenge, 200
+            return "Verification failed", 403
+
+        # Nhận tin nhắn từ Facebook Messenger
+        if request.method == 'POST':
+            data = request.json
+            try:
+                if data.get("object") == "page":
+                    for entry in data.get("entry", []):
+                        for messaging in entry.get("messaging", []):
+                            sender_id = messaging.get("sender", {}).get("id")
+                            message = messaging.get("message", {})
+                            message_text = message.get("text")
+                            
+                            if message_text:
+                                text_lower = message_text.strip().lower()
+                                
+                                # Khởi tạo hoặc cập nhật user khi họ nhắn tin lần đầu
+                                user = get_user(sender_id)
+                                if not user:
+                                    save_or_update_user(sender_id, name="Khách hàng FB", balance=0, orders=[])
+                                
+                                # Phản hồi nút/lệnh "Đơn hàng của tôi"
+                                if "đơn hàng" in text_lower:
+                                    current_user = get_user(sender_id)
+                                    orders = current_user.get("orders", []) if current_user else []
+                                    if not orders:
+                                        send_fb_message(sender_id, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
+                                    else:
+                                        recent = orders[-10:]
+                                        msg_text = "📦 LỊCH SỬ ĐƠN HÀNG:\n\n" + "\n".join([f"• {item}" for item in recent])
+                                        send_fb_message(sender_id, msg_text)
+                                        
+                                # Phản hồi nút/lệnh "Ví & Số dư"
+                                elif "ví" in text_lower or "số dư" in text_lower:
+                                    current_user = get_user(sender_id)
+                                    bal = current_user.get("balance", 0) if current_user else 0
+                                    send_fb_message(sender_id, f"💳 Số dư tích lũy của bạn: {bal:,.0f} VNĐ")
+                                    
+                                # Xử lý khi khách gửi link Shopee / TikTok
+                                elif text_lower.startswith("http"):
+                                    raw_url = message_text.strip()
+                                    encoded_url = quote(raw_url, safe='')
+                                    
+                                    if "tiktok" in raw_url.lower():
+                                        merchant = "tiktoksharelink"
+                                    else:
+                                        merchant = "shopee"
+
+                                    link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={sender_id}"
+                                    reply_content = (
+                                        f"🛍️ LINK MUA HÀNG HOÀN TIỀN\n\n"
+                                        f"Bấm vào liên kết sau để tiến hành mua sắm và nhận thưởng tự động:\n{link_adpia}"
+                                    )
+                                    send_fb_message(sender_id, reply_content)
+                                    
+                                else:
+                                    # Tin nhắn mặc định chào mừng
+                                    send_fb_message(
+                                        sender_id, 
+                                        "👋 Chào mừng bạn đến với hệ thống hoàn tiền! Hãy gửi link sản phẩm Shopee hoặc TikTok vào đây để nhận link mua hàng tích lũy."
+                                    )
+            except Exception as e:
+                print(f"Lỗi xử lý Facebook Webhook: {e}")
+            return "EVENT_RECEIVED", 200
+
+    # B. XỬ LÝ POSTBACK TỪ ADPIA (CỘNG / TRỪ TIỀN VÀO SUPABASE)
     target_id = request.args.get('sub_id') or request.args.get('subid') or request.args.get('utm_source')
     comm_str = request.args.get('commission') or request.args.get('comm') or request.args.get('money')
     status = request.args.get('status') or request.args.get('state') or 'success'
     order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
 
     if not target_id and not comm_str:
-        return "Bot đang chạy bình thường!", 200
+        return "Hệ thống Webhook Facebook & Adpia đang hoạt động ổn định!", 200
 
-    if target_id and comm_str and bot:
+    if target_id and comm_str:
         try:
             target_id = str(target_id).strip()
             total_comm = float(comm_str)
@@ -221,33 +194,24 @@ def webhook():
             # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
             if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
                 new_bal = max(0, old_bal - cashback)
-                old_orders.append(f"❌ Hủy/Hoàn đơn #{order_id}: -{cashback:,.0f} VNĐ")
+                old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
                 save_or_update_user(target_id, balance=new_bal, orders=old_orders)
 
-                try:
-                    bot.send_message(
-                        target_id,
-                        f"⚠️ **CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!**\n\n"
-                        f"📦 Mã đơn: `{order_id}`\n"
-                        f"🔻 Khấu trừ: **-{cashback:,.0f} VNĐ** khỏi ví tích lũy.",
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    print(f"Lỗi gửi tin nhắn khách: {e}")
+                send_fb_message(
+                    target_id,
+                    f"⚠️ CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!\n\n"
+                    f"📦 Mã đơn: {order_id}\n"
+                    f"🔻 Khấu trừ: -{cashback:,.0f} VNĐ khỏi ví tích lũy."
+                )
 
                 if ADMIN_ID:
-                    try:
-                        bot.send_message(
-                            ADMIN_ID,
-                            f"🔻 **BÁO CÓ ĐƠN HÀNG BỊ HỦY!**\n\n"
-                            f"👤 ID Khách: `{target_id}`\n"
-                            f"📦 Mã đơn: `{order_id}`\n"
-                            f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ\n"
-                            f"🔻 Lợi nhuận Admin giảm (10%): -{admin_profit:,.0f} VNĐ",
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        print(f"Lỗi gửi tin nhắn Admin: {e}")
+                    send_fb_message(
+                        ADMIN_ID,
+                        f"🔻 BÁO CÓ ĐƠN HÀNG BỊ HỦY!\n"
+                        f"🆔 ID Khách: {target_id}\n"
+                        f"📦 Mã đơn: {order_id}\n"
+                        f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ"
+                    )
 
             # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
             else:
@@ -255,63 +219,29 @@ def webhook():
                 old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
                 save_or_update_user(target_id, balance=new_bal, orders=old_orders)
 
-                try:
-                    bot.send_message(
-                        target_id, 
-                        f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
-                        f"📦 Mã đơn: `{order_id}`\n"
-                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** (90% hoa hồng) vào ví tích lũy!",
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    print(f"Lỗi gửi tin nhắn khách: {e}")
+                send_fb_message(
+                    target_id, 
+                    f"🎉 ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!\n\n"
+                    f"📦 Mã đơn: {order_id}\n"
+                    f"💰 Bạn được cộng +{cashback:,.0f} VNĐ (90% hoa hồng) vào ví tích lũy!"
+                )
 
                 if ADMIN_ID:
-                    try:
-                        client_name = user.get("name", "Khách hàng") if user else "Khách hàng"
-                        client_link = f"tg://user?id={target_id}"
-
-                        bot.send_message(
-                            ADMIN_ID,
-                            f"🔔 *CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!*\n\n"
-                            f"👤 *Khách hàng:* [{client_name}]({client_link})\n"
-                            f"🆔 ID Khách: `{target_id}`\n"
-                            f"📦 Mã đơn: `{order_id}`\n"
-                            f"💰 Hoa hồng Adpia: {int(total_comm):,} VNĐ\n"
-                            f"🎁 Hoàn cho khách (90%): +{cashback:,.0f} VNĐ\n"
-                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ",
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        print(f"Lỗi gửi tin nhắn Admin: {e}")
+                    send_fb_message(
+                        ADMIN_ID,
+                        f"🔔 CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!\n"
+                        f"🆔 ID Khách: {target_id}\n"
+                        f"📦 Mã đơn: {order_id}\n"
+                        f"🎁 Hoàn khách (90%): +{cashback:,.0f} VNĐ\n"
+                        f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ"
+                    )
 
         except Exception as e:
-            print(f"Lỗi xử lý Postback: {e}")
+            print(f"Lỗi xử lý Postback Adpia: {e}")
 
     return "OK", 200
-
-# --- 5. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
-def run_bot():
-    if not bot:
-        print("❌ Chưa có TOKEN Bot.")
-        return
-    print("🤖 Bot Telegram đang bắt đầu Polling...")
-    
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        print(f"Cảnh báo xóa webhook: {e}")
-
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
-        except Exception as e:
-            print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
-            time.sleep(5)
-
-threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
+                                                        
