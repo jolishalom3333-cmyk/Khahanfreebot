@@ -1,5 +1,4 @@
-pyTelegramBotAPI
+discord.py
 Flask
-requests
 supabase
 gunicorn
