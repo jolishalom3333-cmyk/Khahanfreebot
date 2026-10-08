@@ -96,22 +96,26 @@ def main_webhook():
     if request.method == 'HEAD':
         return "", 200
 
-    # A. XỬ LÝ XÁC THỰC VÀ NHẬN TIN NHẮN TỪ FACEBOOK MESSENGER (GET / POST kèm hub.mode)
-    if request.args.get('hub.mode') == 'subscribe' or request.is_json:
-        # Xác thực Webhook với Facebook
-        if request.method == 'GET':
-            mode = request.args.get("hub.mode")
-            token = request.args.get("hub.verify_token")
-            challenge = request.args.get("hub.challenge")
-            if mode == "subscribe" and token == VERIFY_TOKEN:
-                return challenge, 200
+    # A. XỬ LÝ XÁC THỰC GET TỪ FACEBOOK MESSENGER
+    if request.method == 'GET':
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+        elif mode or token or 'hub.challenge' in request.args:
             return "Verification failed", 403
+        
+        return "Hệ thống Webhook Facebook & Adpia đang hoạt động ổn định!", 200
 
-        # Nhận tin nhắn từ Facebook Messenger
-        if request.method == 'POST':
+    # B. XỬ LÝ POST (NHẬN TIN NHẮN TỪ FACEBOOK HOẶC POSTBACK TỪ ADPIA)
+    if request.method == 'POST':
+        # 1. Xử lý dữ liệu gửi từ Facebook Messenger
+        if request.is_json:
             data = request.json
-            try:
-                if data.get("object") == "page":
+            if data and data.get("object") == "page":
+                try:
                     for entry in data.get("entry", []):
                         for messaging in entry.get("messaging", []):
                             sender_id = messaging.get("sender", {}).get("id")
@@ -166,82 +170,79 @@ def main_webhook():
                                         sender_id, 
                                         "👋 Chào mừng bạn đến với hệ thống hoàn tiền! Hãy gửi link sản phẩm Shopee hoặc TikTok vào đây để nhận link mua hàng tích lũy."
                                     )
+                except Exception as e:
+                    print(f"Lỗi xử lý Facebook Webhook: {e}")
+                return "EVENT_RECEIVED", 200
+
+        # 2. Xử lý Postback từ Adpia (Cộng / Trừ tiền vào Supabase)
+        target_id = request.args.get('sub_id') or request.args.get('subid') or request.args.get('utm_source')
+        comm_str = request.args.get('commission') or request.args.get('comm') or request.args.get('money')
+        status = request.args.get('status') or request.args.get('state') or 'success'
+        order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
+
+        if target_id and comm_str:
+            try:
+                target_id = str(target_id).strip()
+                total_comm = float(comm_str)
+                cashback = int(total_comm * 0.90)
+                admin_profit = int(total_comm - cashback)
+                status_clean = str(status).lower().strip()
+
+                user = get_user(target_id)
+                old_bal = user.get("balance", 0) if user else 0
+                old_orders = user.get("orders", []) if user else []
+
+                # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
+                if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
+                    new_bal = max(0, old_bal - cashback)
+                    old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
+                    save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                    send_fb_message(
+                        target_id,
+                        f"⚠️ CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!\n\n"
+                        f"📦 Mã đơn: {order_id}\n"
+                        f"🔻 Khấu trừ: -{cashback:,.0f} VNĐ khỏi ví tích lũy."
+                    )
+
+                    if ADMIN_ID:
+                        send_fb_message(
+                            ADMIN_ID,
+                            f"🔻 BÁO CÓ ĐƠN HÀNG BỊ HỦY!\n"
+                            f"🆔 ID Khách: {target_id}\n"
+                            f"📦 Mã đơn: {order_id}\n"
+                            f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ"
+                        )
+
+                # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
+                else:
+                    new_bal = old_bal + cashback
+                    old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
+                    save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                    send_fb_message(
+                        target_id, 
+                        f"🎉 ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!\n\n"
+                        f"📦 Mã đơn: {order_id}\n"
+                        f"💰 Bạn được cộng +{cashback:,.0f} VNĐ (90% hoa hồng) vào ví tích lũy!"
+                    )
+
+                    if ADMIN_ID:
+                        send_fb_message(
+                            ADMIN_ID,
+                            f"🔔 CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!\n"
+                            f"🆔 ID Khách: {target_id}\n"
+                            f"📦 Mã đơn: {order_id}\n"
+                            f"🎁 Hoàn khách (90%): +{cashback:,.0f} VNĐ\n"
+                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ"
+                        )
+
             except Exception as e:
-                print(f"Lỗi xử lý Facebook Webhook: {e}")
-            return "EVENT_RECEIVED", 200
-
-    # B. XỬ LÝ POSTBACK TỪ ADPIA (CỘNG / TRỪ TIỀN VÀO SUPABASE)
-    target_id = request.args.get('sub_id') or request.args.get('subid') or request.args.get('utm_source')
-    comm_str = request.args.get('commission') or request.args.get('comm') or request.args.get('money')
-    status = request.args.get('status') or request.args.get('state') or 'success'
-    order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
-
-    if not target_id and not comm_str:
-        return "Hệ thống Webhook Facebook & Adpia đang hoạt động ổn định!", 200
-
-    if target_id and comm_str:
-        try:
-            target_id = str(target_id).strip()
-            total_comm = float(comm_str)
-            cashback = int(total_comm * 0.90)
-            admin_profit = int(total_comm - cashback)
-            status_clean = str(status).lower().strip()
-
-            user = get_user(target_id)
-            old_bal = user.get("balance", 0) if user else 0
-            old_orders = user.get("orders", []) if user else []
-
-            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
-            if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
-                new_bal = max(0, old_bal - cashback)
-                old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-
-                send_fb_message(
-                    target_id,
-                    f"⚠️ CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!\n\n"
-                    f"📦 Mã đơn: {order_id}\n"
-                    f"🔻 Khấu trừ: -{cashback:,.0f} VNĐ khỏi ví tích lũy."
-                )
-
-                if ADMIN_ID:
-                    send_fb_message(
-                        ADMIN_ID,
-                        f"🔻 BÁO CÓ ĐƠN HÀNG BỊ HỦY!\n"
-                        f"🆔 ID Khách: {target_id}\n"
-                        f"📦 Mã đơn: {order_id}\n"
-                        f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ"
-                    )
-
-            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
-            else:
-                new_bal = old_bal + cashback
-                old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-
-                send_fb_message(
-                    target_id, 
-                    f"🎉 ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!\n\n"
-                    f"📦 Mã đơn: {order_id}\n"
-                    f"💰 Bạn được cộng +{cashback:,.0f} VNĐ (90% hoa hồng) vào ví tích lũy!"
-                )
-
-                if ADMIN_ID:
-                    send_fb_message(
-                        ADMIN_ID,
-                        f"🔔 CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!\n"
-                        f"🆔 ID Khách: {target_id}\n"
-                        f"📦 Mã đơn: {order_id}\n"
-                        f"🎁 Hoàn khách (90%): +{cashback:,.0f} VNĐ\n"
-                        f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ"
-                    )
-
-        except Exception as e:
-            print(f"Lỗi xử lý Postback Adpia: {e}")
+                print(f"Lỗi xử lý Postback Adpia: {e}")
 
     return "OK", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                                                        
+    
