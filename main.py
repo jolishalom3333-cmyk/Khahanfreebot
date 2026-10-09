@@ -1,90 +1,317 @@
 import os
-import re
-from threading import Thread
-from flask import Flask
-import discord
-from discord.ext import commands
+import threading
+import time
+from urllib.parse import quote
+from flask import Flask, request
+import telebot
 
-# 1. Khởi động Web Server giả lập để duy trì Render (tránh bị sleep)
-app = Flask("")
+# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
+ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
+bot = telebot.TeleBot(TOKEN) if TOKEN else None
+app = Flask(__name__)
 
-@app.route("/")
-def home():
-  Template = "Bot Discord Hoàn Tiền Shopee & TikTok đang hoạt động trực tuyến!"
-  return Template
+# Kết nối CSDL Supabase an toàn & Lưu lỗi chi tiết
+supabase_error = ""
+supabase = None
 
+if not SUPABASE_URL:
+    supabase_error = "Thiếu SUPABASE_URL trên Render Environment"
+elif not SUPABASE_KEY:
+    supabase_error = "Thiếu SUPABASE_KEY trên Render Environment"
+else:
+    try:
+        from supabase import create_client
+        clean_url = SUPABASE_URL.strip("[]'\" ")
+        clean_key = SUPABASE_KEY.strip("[]'\" ")
+        supabase = create_client(clean_url, clean_key)
+        print("✅ Kết nối Supabase thành công!")
+    except Exception as e:
+        supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
+        print(f"❌ {supabase_error}")
 
-def run_web():
-  app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+# --- 2. HÀM ĐỌC / GHI DỮ LIỆU TỪ SUPABASE ---
+def get_user(user_id):
+    if not supabase:
+        return None
+    try:
+        res = supabase.table('users').select('*').eq('id', str(user_id)).execute()
+        if res.data:
+            return res.data[0]
+    except Exception as e:
+        print("Lỗi đọc dữ liệu Supabase:", e)
+    return None
 
+def save_or_update_user(user_id, name=None, username=None, balance=None, orders=None):
+    if not supabase:
+        return
+    try:
+        user_id_str = str(user_id)
+        existing = get_user(user_id_str)
+        
+        if existing:
+            data_to_update = {}
+            if name is not None: data_to_update["name"] = name
+            if username is not None: data_to_update["username"] = username
+            if balance is not None: data_to_update["balance"] = balance
+            if orders is not None: data_to_update["orders"] = orders
+            
+            if data_to_update:
+                supabase.table('users').update(data_to_update).eq('id', user_id_str).execute()
+        else:
+            new_data = {
+                "id": user_id_str,
+                "name": name or "Khách hàng",
+                "username": username or "",
+                "balance": balance if balance is not None else 0,
+                "orders": orders if orders is not None else []
+            }
+            supabase.table('users').insert(new_data).execute()
+    except Exception as e:
+        print("Lỗi ghi dữ liệu Supabase:", e)
 
-# 2. Cấu hình Discord Bot
-intents = discord.Intents.default()
-intents.message_content = True  # Bắt buộc bật để đọc nội dung tin nhắn
-intents.guilds = True
+# --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
+if bot:
+    @bot.message_handler(commands=['start'])
+    def send_welcome(message):
+        uid = str(message.chat.id)
+        first_name = message.from_user.first_name or "Khách"
+        username = message.from_user.username or ""
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+        user = get_user(uid)
+        if not user:
+            save_or_update_user(uid, name=first_name, username=username, balance=0, orders=[])
+        else:
+            save_or_update_user(uid, name=first_name, username=username)
 
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("📦 Đơn hàng của tôi", "💳 Ví & Số dư")
+        bot.reply_to(message, f"👋 Chào mừng {first_name}! Hãy gửi link Shopee/TikTok để mua hàng hoàn tiền.", reply_markup=markup)
 
-@bot.event
-async def on_ready():
-  print(f"Bot đã đăng nhập thành công dưới tên: {bot.user}")
+    @bot.message_handler(func=lambda msg: msg.text == "📦 Đơn hàng của tôi")
+    def my_orders(message):
+        uid = str(message.from_user.id)
+        user = get_user(uid)
+        orders = user.get("orders", []) if user else []
+        if not orders:
+            bot.reply_to(message, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
+        else:
+            recent = orders[-10:]
+            msg_text = "📦 **LỊCH SỬ ĐƠN HÀNG:**\n\n" + "\n".join([f"• {item}" for item in recent])
+            bot.reply_to(message, msg_text, parse_mode="Markdown")
 
+    @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
+    def my_balance(message):
+        uid = str(message.from_user.id)
+        user = get_user(uid)
+        bal = user.get("balance", 0) if user else 0
+        bot.reply_to(message, f"💳 **Số dư tích lũy:** {bal:,.0f} VNĐ", parse_mode="Markdown")
 
-@bot.event
-async def on_message(message):
-  # Không để bot tự phản hồi tin nhắn của chính nó
-  if message.author == bot.user:
-    return
+    @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
+    def convert_link(message):
+        uid = message.from_user.id
+        raw_url = message.text.strip()
+        encoded_url = quote(raw_url, safe='')
+        
+        # TỰ ĐỘNG PHÂN LOẠI MERCHANT TƯƠNG ỨNG MỖI SÀN
+        if "tiktok" in raw_url.lower():
+            merchant = "tiktoksharelink"
+        else:
+            merchant = "shopee"
 
-  content = message.content
+        link_adpia = f"https://click.adpia.vn/tracking.php?m={merchant}&a=A100156876&l=9999&tu={encoded_url}&utm_source={uid}"
+        bot.reply_to(message, f"🛍️ <a href='{link_adpia}'><b>LINK MUA HÀNG HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{link_adpia}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", parse_mode="HTML")
 
-  # Kiểm tra xem tin nhắn có chứa link Shopee hoặc TikTok không
-  has_shopee = "shopee.vn" in content or "shp.ee" in content
-  has_tiktok = "tiktok.com" in content or "vt.tiktok.com" in content
+    # --- LỆNH ADMIN ---
+    @bot.message_handler(commands=['congtien'])
+    def cong_tien(message):
+        if str(message.from_user.id) != str(ADMIN_ID): return
+        try:
+            parts = message.text.split()
+            target_id = parts[1]
+            amount = int(parts[2])
+            
+            user = get_user(target_id)
+            old_bal = user.get("balance", 0) if user else 0
+            old_orders = user.get("orders", []) if user else []
+            
+            new_bal = old_bal + amount
+            order_entry = f"➕ Admin cộng tay: +{amount:,.0f} VNĐ"
+            old_orders.append(order_entry)
+            
+            save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+            bot.reply_to(message, f"✅ Đã cộng {amount:,.0f} VNĐ cho ID {target_id}")
+            try:
+                bot.send_message(target_id, f"🎉 Bạn vừa được Admin cộng +{amount:,.0f} VNĐ vào ví tích lũy!")
+            except Exception:
+                pass
+        except Exception:
+            bot.reply_to(message, "⚠️ Cú pháp: `/congtien <USER_ID> <SO_TIEN>`", parse_mode="Markdown")
 
-  if has_shopee or has_tiktok:
-    # Logic chuyển đổi link (Thay thế bằng link affiliate thực tế của bạn)
-    # Ví dụ tạm thời: Gắn thêm mã tracking hoặc gọi API rút gọn
-    affiliate_link = (
-        f"{content}\n👉 *(Link đã được tự động chuyển đổi sang Affiliate)*"
-    )
+    @bot.message_handler(commands=['danhsach'])
+    def list_users(message):
+        if str(message.from_user.id) != str(ADMIN_ID): return
+        try:
+            if not supabase:
+                bot.reply_to(message, f"❌ Chưa kết nối Supabase thành công!\n\n👉 <b>Lý do:</b> {supabase_error}", parse_mode="HTML")
+                return
+            res = supabase.table('users').select('*').execute()
+            users = res.data
+            if not users:
+                bot.reply_to(message, "📂 Chưa có khách hàng nào.")
+                return
 
-    # Gửi phản hồi lại kênh chat
-    await message.reply(
-        f"Cảm ơn {message.author.mention}! Đây là link mua hàng của bạn:\n{
-            affiliate_link
-        }"
-    )
+            msg = "📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ (90%):</b>\n\n"
+            for info in users:
+                uid = info['id']
+                name = info.get("name", "Khách hàng")
+                username = f"(@{info['username']})" if info.get("username") else ""
+                balance = info.get("balance", 0)
+                
+                msg += f"👤 <b><a href='tg://user?id={uid}'>{name}</a></b> {username}\n"
+                msg += f"🆔 ID: <code>{uid}</code>\n"
+                msg += f"💰 Số dư: <b>{balance:,.0f} VNĐ</b>\n"
+                msg += f"👉 Nhắn nhanh: <code>/nhan {uid} Nội dung</code>\n"
+                msg += "-------------------------------\n"
 
-  # Xử lý các lệnh dạng prefix (ví dụ !sodu)
-  await bot.process_commands(message)
+            bot.send_message(ADMIN_ID, msg, parse_mode="HTML")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Lỗi: {e}")
 
+    @bot.message_handler(commands=['nhan'])
+    def send_custom_msg(message):
+        if str(message.from_user.id) != str(ADMIN_ID): return
+        try:
+            p = message.text.split(" ", 2)
+            bot.send_message(p[1], f"💬 **Lời nhắn từ Admin:**\n\n{p[2]}", parse_mode="Markdown")
+            bot.reply_to(message, "✅ Đã gửi tin nhắn thành công!")
+        except Exception:
+            bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
 
-# Lệnh kiểm tra số dư mẫu: gõ !sodu trong chat
-@bot.command(name="sodu")
-async def check_balance(ctx):
-  # Bạn có thể kết nối database hoặc API lấy số dư thực tế của khách hàng ở đây
-  balance = "0 VNĐ"
-  await ctx.send(
-      f"Hi {ctx.author.mention}, số dư tài khoản hoàn tiền của bạn hiện tại là:"
-      f" **{balance}**"
-  )
+# --- 4. WEBHOOK NHẬN ĐƠN HÀNG HOÀN TIỀN TỪ ADPIA & HEALTH CHECK ---
+@app.route('/', methods=['GET', 'POST', 'HEAD'])
+@app.route('/postback', methods=['GET', 'POST', 'HEAD'])
+def webhook():
+    if request.method == 'HEAD':
+        return "", 200
 
+    target_id = request.args.get('sub_id') or request.args.get('subid') or request.args.get('utm_source')
+    comm_str = request.args.get('commission') or request.args.get('comm') or request.args.get('money')
+    status = request.args.get('status') or request.args.get('state') or 'success'
+    order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
 
-# 3. Chạy song song Web Server và Discord Bot
-if __name__ == "__main__":
-  # Chạy web server ở luồng riêng
-  t = Thread(target=run_web)
-  t.start()
+    if not target_id and not comm_str:
+        return "Bot đang chạy bình thường!", 200
 
-  # Chạy Discord bot (Lấy Token từ biến môi trường trên Render)
-  TOKEN = os.environ.get("DISCORD_TOKEN")
-  if TOKEN:
-    bot.run(TOKEN)
-  else:
-    print(
-        "Lỗi: Chưa cấu hình biến môi trường DISCORD_TOKEN trên Render!"
-    )
+    if target_id and comm_str and bot:
+        try:
+            target_id = str(target_id).strip()
+            total_comm = float(comm_str)
+            cashback = int(total_comm * 0.90)
+            admin_profit = int(total_comm - cashback)
+            status_clean = str(status).lower().strip()
+
+            user = get_user(target_id)
+            old_bal = user.get("balance", 0) if user else 0
+            old_orders = user.get("orders", []) if user else []
+
+            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
+            if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
+                new_bal = max(0, old_bal - cashback)
+                old_orders.append(f"❌ Hủy/Hoàn đơn #{order_id}: -{cashback:,.0f} VNĐ")
+                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                try:
+                    bot.send_message(
+                        target_id,
+                        f"⚠️ **CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!**\n\n"
+                        f"📦 Mã đơn: `{order_id}`\n"
+                        f"🔻 Khấu trừ: **-{cashback:,.0f} VNĐ** khỏi ví tích lũy.",
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    print(f"Lỗi gửi tin nhắn khách: {e}")
+
+                if ADMIN_ID:
+                    try:
+                        bot.send_message(
+                            ADMIN_ID,
+                            f"🔻 **BÁO CÓ ĐƠN HÀNG BỊ HỦY!**\n\n"
+                            f"👤 ID Khách: `{target_id}`\n"
+                            f"📦 Mã đơn: `{order_id}`\n"
+                            f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ\n"
+                            f"🔻 Lợi nhuận Admin giảm (10%): -{admin_profit:,.0f} VNĐ",
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"Lỗi gửi tin nhắn Admin: {e}")
+
+            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
+            else:
+                new_bal = old_bal + cashback
+                old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
+                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                try:
+                    bot.send_message(
+                        target_id, 
+                        f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
+                        f"📦 Mã đơn: `{order_id}`\n"
+                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** (90% hoa hồng) vào ví tích lũy!",
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    print(f"Lỗi gửi tin nhắn khách: {e}")
+
+                if ADMIN_ID:
+                    try:
+                        client_name = user.get("name", "Khách hàng") if user else "Khách hàng"
+                        client_link = f"tg://user?id={target_id}"
+
+                        bot.send_message(
+                            ADMIN_ID,
+                            f"🔔 *CÓ ĐƠN HÀNG MỚI TỪ KHÁCH!*\n\n"
+                            f"👤 *Khách hàng:* [{client_name}]({client_link})\n"
+                            f"🆔 ID Khách: `{target_id}`\n"
+                            f"📦 Mã đơn: `{order_id}`\n"
+                            f"💰 Hoa hồng Adpia: {int(total_comm):,} VNĐ\n"
+                            f"🎁 Hoàn cho khách (90%): +{cashback:,.0f} VNĐ\n"
+                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ",
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        print(f"Lỗi gửi tin nhắn Admin: {e}")
+
+        except Exception as e:
+            print(f"Lỗi xử lý Postback: {e}")
+
+    return "OK", 200
+
+# --- 5. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
+def run_bot():
+    if not bot:
+        print("❌ Chưa có TOKEN Bot.")
+        return
+    print("🤖 Bot Telegram đang bắt đầu Polling...")
     
+    try:
+        bot.remove_webhook()
+    except Exception as e:
+        print(f"Cảnh báo xóa webhook: {e}")
+
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
+            time.sleep(5)
+
+threading.Thread(target=run_bot, daemon=True).start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+                                              
