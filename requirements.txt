@@ -1,4 +1,4 @@
-discord.py
+python-telegram-bot
 Flask
 supabase
 gunicorn
