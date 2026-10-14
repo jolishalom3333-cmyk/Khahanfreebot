@@ -12,7 +12,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-# Access Token của Accesstrade lấy từ biến môi trường hoặc dùng mặc định
+# Access Token của Accesstrade lấy từ biến môi trường trên Render
 AT_ACCESS_TOKEN = os.environ.get('AT_ACCESS_TOKEN') or "mC9R_6IaprMxC1AO1GJfa37zL4QiRjzo"
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -95,6 +95,9 @@ def create_accesstrade_link(product_url, telegram_id):
     
     try:
         res = requests.post(api_url, json=payload, headers=headers, timeout=10)
+        print(f"DEBUG AT Status: {res.status_code}")
+        print(f"DEBUG AT Response: {res.text}")
+        
         if res.status_code == 200:
             data = res.json()
             link = data.get("data", {}).get("short_url") or data.get("result", {}).get("short_link")
@@ -373,4 +376,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                            
+    
