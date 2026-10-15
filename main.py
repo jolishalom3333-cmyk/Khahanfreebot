@@ -116,14 +116,13 @@ if bot:
         raw_url = message.text.strip()
         encoded_url = quote(raw_url, safe='')
         
-        # Phân loại link TikTok hay Shopee dựa theo ID chiến dịch thực tế từ tài khoản Accesstrade
+        # Phân loại link TikTok hay Shopee chuẩn xác theo ID thực tế từ Accesstrade
         if "tiktok" in raw_url.lower():
-            campaign_path = "7073909970291373175/6648523843406889655"  # ID TikTok Shop[span_2](start_span)[span_2](end_span)
+            campaign_path = "7073909970291373175/6648523843406889655"  # ID TikTok Shop
+            afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
         else:
-            campaign_path = "7073909970291373175/4751584435713464237"  # ID Shopee[span_3](start_span)[span_3](end_span)
-
-        # Tạo link tracking chuẩn kèm sub_id (Telegram ID của khách)
-        afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
+            campaign_path = "7073909970291373175/4751584435713464237"  # ID Shopee kèm chuẩn sub4=oneatweb
+            afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub4=oneatweb&sub_id={uid}"
         
         bot.reply_to(
             message, 
@@ -348,4 +347,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-        
+            
