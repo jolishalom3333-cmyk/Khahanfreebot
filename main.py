@@ -1,7 +1,6 @@
 import os
 import threading
 import time
-import requests
 from urllib.parse import quote
 from flask import Flask, request
 import telebot
@@ -11,9 +10,6 @@ TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
-
-# Access Token của Accesstrade lấy từ biến môi trường trên Render
-AT_ACCESS_TOKEN = os.environ.get('AT_ACCESS_TOKEN') or "mC9R_6IaprMxC1AO1GJfa37zL4QiRjzo"
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
@@ -77,37 +73,6 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
     except Exception as e:
         print("Lỗi ghi dữ liệu Supabase:", e)
 
-# --- HÀM TẠO DEEPLINK ACCESSTRADE ---
-def create_accesstrade_link(product_url, telegram_id):
-    """
-    Gọi API Deeplink public của Accesstrade để gắn sub_id = Telegram ID
-    """
-    api_url = "https://api.accesstrade.vn/v1/custom_links"
-    headers = {
-        "Authorization": f"Token {AT_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": product_url,
-        "utm_source": "telegram_bot",
-        "sub_id": str(telegram_id)  # Gắn ID khách để nhận Postback
-    }
-    
-    try:
-        res = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        print(f"DEBUG AT Status: {res.status_code}")
-        print(f"DEBUG AT Response: {res.text}")
-        
-        if res.status_code == 200:
-            data = res.json()
-            link = data.get("data", {}).get("short_url") or data.get("result", {}).get("short_link")
-            if link:
-                return link
-    except Exception as e:
-        print(f"Lỗi gọi API Accesstrade: {e}")
-        
-    return product_url  # Trả về link gốc nếu gọi API không thành công
-
 # --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
 if bot:
     @bot.message_handler(commands=['start'])
@@ -149,9 +114,10 @@ if bot:
     def convert_link(message):
         uid = message.from_user.id
         raw_url = message.text.strip()
+        encoded_url = quote(raw_url, safe='')
         
-        # Gọi hàm tạo link Accesstrade gắn sub_id chính xác
-        afflink = create_accesstrade_link(raw_url, uid)
+        # Link tracking trực tiếp qua Accesstrade kèm sub_id chuẩn 100%
+        afflink = f"https://go.accesstrade.vn/deep_link?url={encoded_url}&sub_id={uid}"
         
         bot.reply_to(
             message, 
@@ -376,4 +342,3 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
