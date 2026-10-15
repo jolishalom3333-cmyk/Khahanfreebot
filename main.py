@@ -116,8 +116,14 @@ if bot:
         raw_url = message.text.strip()
         encoded_url = quote(raw_url, safe='')
         
-        # Link tracking trực tiếp qua Accesstrade kèm sub_id chuẩn 100%
-        afflink = f"https://go.accesstrade.vn/deep_link?url={encoded_url}&sub_id={uid}"
+        # Phân loại link TikTok hay Shopee dựa theo ID chiến dịch thực tế từ tài khoản Accesstrade
+        if "tiktok" in raw_url.lower():
+            campaign_path = "7073909970291373175/6648523843406889655"  # ID TikTok Shop[span_2](start_span)[span_2](end_span)
+        else:
+            campaign_path = "7073909970291373175/4751584435713464237"  # ID Shopee[span_3](start_span)[span_3](end_span)
+
+        # Tạo link tracking chuẩn kèm sub_id (Telegram ID của khách)
+        afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
         
         bot.reply_to(
             message, 
@@ -246,7 +252,7 @@ def webhook():
             old_bal = user.get("balance", 0) if user else 0
             old_orders = user.get("orders", []) if user else []
 
-            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG (TRỪ TIỀN)
+            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG
             if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
                 new_bal = max(0, old_bal - cashback)
                 old_orders.append(f"❌ Hủy/Hoàn đơn #{order_id}: -{cashback:,.0f} VNĐ")
@@ -277,7 +283,7 @@ def webhook():
                     except Exception as e:
                         print(f"Lỗi gửi tin nhắn Admin: {e}")
 
-            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG (CỘNG TIỀN)
+            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG
             else:
                 new_bal = old_bal + cashback
                 old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
@@ -342,3 +348,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+        
