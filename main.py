@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from datetime import datetime
 from urllib.parse import quote
 from flask import Flask, request
 import telebot
@@ -11,10 +12,13 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
+# Tỷ lệ hoàn tiền cho khách (Mặc định 90% -> Admin hưởng 10%)
+CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
+
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# Kết nối CSDL Supabase an toàn & Lưu lỗi chi tiết
+# Kết nối CSDL Supabase
 supabase_error = ""
 supabase = None
 
@@ -33,7 +37,7 @@ else:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
 
-# --- 2. HÀM ĐỌC / GHI DỮ LIỆU TỪ SUPABASE ---
+# --- 2. HÀM TƯƠNG TÁC CƠ SỞ DỮ LIỆU SUPABASE ---
 def get_user(user_id):
     if not supabase:
         return None
@@ -42,7 +46,7 @@ def get_user(user_id):
         if res.data:
             return res.data[0]
     except Exception as e:
-        print("Lỗi đọc dữ liệu Supabase:", e)
+        print("Lỗi đọc dữ liệu user Supabase:", e)
     return None
 
 def save_or_update_user(user_id, name=None, username=None, balance=None, orders=None):
@@ -71,7 +75,21 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
             }
             supabase.table('users').insert(new_data).execute()
     except Exception as e:
-        print("Lỗi ghi dữ liệu Supabase:", e)
+        print("Lỗi ghi dữ liệu user Supabase:", e)
+
+def log_click(user_id, raw_url):
+    """Ghi nhận thông tin click vào bảng clicks trên Supabase để đo CVR"""
+    if not supabase:
+        return
+    try:
+        click_data = {
+            "user_id": str(user_id),
+            "original_url": raw_url,
+            "created_at": datetime.now().isoformat()
+        }
+        supabase.table('clicks').insert(click_data).execute()
+    except Exception as e:
+        print("Lưu thông tin Click gặp sự cố:", e)
 
 # --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
 if bot:
@@ -89,7 +107,17 @@ if bot:
 
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("📦 Đơn hàng của tôi", "💳 Ví & Số dư")
-        bot.reply_to(message, f"👋 Chào mừng {first_name}! Hãy gửi link Shopee/TikTok để mua hàng hoàn tiền.", reply_markup=markup)
+        markup.add("❓ Hướng dẫn mua hàng", "💬 Hỗ trợ Admin")
+        
+        welcome_text = (
+            f"👋 **Chào mừng {first_name} đến với Bot Hoàn Tiền Tự Động!**\n\n"
+            f"🛒 **Cách nhận hoàn tiền {int(CASHBACK_RATE * 100)}%:**\n"
+            f"1️⃣ Copy link sản phẩm trên Shopee / TikTok Shop.\n"
+            f"2️⃣ Gửi link trực tiếp vào đây cho Bot.\n"
+            f"3️⃣ Bấm link rút gọn Bot trả về để tiến hành thanh toán mua hàng.\n\n"
+            f"📌 *Bấm '❓ Hướng dẫn mua hàng' bên dưới để biết cách mua không bị mất đơn!*"
+        )
+        bot.reply_to(message, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
     @bot.message_handler(func=lambda msg: msg.text == "📦 Đơn hàng của tôi")
     def my_orders(message):
@@ -100,7 +128,7 @@ if bot:
             bot.reply_to(message, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
         else:
             recent = orders[-10:]
-            msg_text = "📦 **LỊCH SỬ ĐƠN HÀNG:**\n\n" + "\n".join([f"• {item}" for item in recent])
+            msg_text = "📦 **LỊCH SỬ ĐƠN HÀNG GẦN ĐÂY:**\n\n" + "\n".join([f"• {item}" for item in recent])
             bot.reply_to(message, msg_text, parse_mode="Markdown")
 
     @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
@@ -108,7 +136,34 @@ if bot:
         uid = str(message.from_user.id)
         user = get_user(uid)
         bal = user.get("balance", 0) if user else 0
-        bot.reply_to(message, f"💳 **Số dư tích lũy:** {bal:,.0f} VNĐ", parse_mode="Markdown")
+        bot.reply_to(
+            message, 
+            f"💳 **SỐ DƯ VÍ TÍCH LŨY:** `{bal:,.0f} VNĐ`\n\n"
+            f"💡 *Khi đạt hạn mức rút tiền, nhắn Admin qua nút '💬 Hỗ trợ Admin' để được duyệt thanh toán khoản cashback nhé!*", 
+            parse_mode="Markdown"
+        )
+
+    @bot.message_handler(func=lambda msg: msg.text in ["❓ Hướng dẫn mua hàng", "/huongdan"])
+    def shopping_guide(message):
+        guide_text = (
+            "📌 **QUY TRÌNH MUA HÀNG ĐỂ ĐẢM BẢO NHẬN ĐỦ HOÀN TIỀN:**\n\n"
+            "1️⃣ **Không bỏ sẵn hàng vào giỏ:** Xóa sản phẩm khỏi giỏ trước khi lấy link qua Bot.\n"
+            "2️⃣ **Thao tác liền mạch:** Copy link gửi Bot ➔ Bấm link Bot trả về ➔ Thêm vào giỏ và Thanh toán ngay.\n"
+            "3️⃣ **1 Link = 1 Đơn:** Mỗi lần muốn mua đơn mới, vui lòng gửi lại link cho Bot lấy link tracking mới.\n"
+            "4️⃣ **Thời gian ghi nhận đơn:**\n"
+            "   • **TikTok Shop:** Cập nhật sau 1-3 giờ.\n"
+            "   • **Shopee:** Cập nhật sau 24h - 48h (không tính đơn hủy/trả).\n\n"
+            "🎯 *Chúc bạn mua sắm tiết kiệm nhất!*"
+        )
+        bot.reply_to(message, guide_text, parse_mode="Markdown")
+
+    @bot.message_handler(func=lambda msg: msg.text == "💬 Hỗ trợ Admin")
+    def contact_admin(message):
+        bot.reply_to(
+            message, 
+            "💬 Bạn cần hỗ trợ hoặc rút tiền hoàn? Hãy gửi tin nhắn chi tiết kèm **Mã đơn hàng/SĐT** vào đây, Admin sẽ hỗ trợ xử lý trực tiếp nhé!",
+            parse_mode="Markdown"
+        )
 
     @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
     def convert_link(message):
@@ -116,21 +171,69 @@ if bot:
         raw_url = message.text.strip()
         encoded_url = quote(raw_url, safe='')
         
-        # Phân loại link TikTok hay Shopee chuẩn xác theo ID thực tế từ Accesstrade
+        # Ghi nhận Click để đếm CVR
+        log_click(uid, raw_url)
+        
+        # Phân loại chiến dịch Shopee / TikTok Shop
         if "tiktok" in raw_url.lower():
-            campaign_path = "7073909970291373175/6648523843406889655"  # ID TikTok Shop
+            campaign_path = "7073909970291373175/6648523843406889655"  # TikTok Shop
             afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
         else:
-            campaign_path = "7073909970291373175/4751584435713464237"  # ID Shopee kèm chuẩn sub4=oneatweb
+            campaign_path = "7073909970291373175/4751584435713464237"  # Shopee
             afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub4=oneatweb&sub_id={uid}"
         
         bot.reply_to(
             message, 
-            f"🛍️ <a href='{afflink}'><b>LINK MUA HÀNG HOÀN TIỀN 90%</b></a>\n\n👉 <a href='{afflink}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>", 
+            f"🛍️ <a href='{afflink}'><b>LINK MUA HÀNG HOÀN TIỀN {int(CASHBACK_RATE*100)}%</b></a>\n\n"
+            f"👉 <a href='{afflink}'>BẤM VÀO ĐÂY ĐỂ MUA HÀNG</a>\n\n"
+            f"⚠️ <i>Lưu ý: Không bỏ sản phẩm sẵn vào giỏ trước khi bấm link nhé!</i>", 
             parse_mode="HTML"
         )
 
-    # --- LỆNH ADMIN ---
+    # --- HỆ THỐNG LỆNH ADMIN (BOSS QUẢN LÝ) ---
+
+    @bot.message_handler(commands=['baocao', 'stats'])
+    def view_report(message):
+        """Báo cáo Thống kê CVR & Doanh thu chuẩn dạng Dashboard"""
+        if str(message.from_user.id) != str(ADMIN_ID): return
+        if not supabase:
+            bot.reply_to(message, "❌ Chưa kết nối CSDL Supabase!")
+            return
+
+        try:
+            # 1. Đếm tổng lượt click
+            click_res = supabase.table('clicks').select('id', count='exact').execute()
+            total_clicks = click_res.count if click_res.count is not None else 0
+
+            # 2. Lấy dữ liệu danh sách khách hàng & thống kê ví
+            user_res = supabase.table('users').select('*').execute()
+            users = user_res.data or []
+            
+            total_users = len(users)
+            total_cashback_given = sum([u.get('balance', 0) for u in users])
+            
+            # Tính ước lượng doanh thu Admin giữ lại (10%)
+            # Cashback = 90% -> Total Comm = Cashback / 0.9 -> Admin Profit = Total Comm * 0.1
+            admin_profit_est = (total_cashback_given / CASHBACK_RATE) * (1.0 - CASHBACK_RATE) if CASHBACK_RATE > 0 else 0
+
+            cvr = (total_users / total_clicks * 100) if total_clicks > 0 else 0
+
+            report_msg = (
+                "📊 **BÁO CÁO HIỆU SUẤT VẬN HÀNH BOT**\n"
+                "------------------------------------\n"
+                f"👤 **Tổng số Khách hàng:** `{total_users}` người\n"
+                f"🖱️ **Tổng số Lượt Click:** `{total_clicks}` clicks\n"
+                f"📈 **Tỷ lệ chuyển đổi (CVR ước tính):** `{cvr:.2f}%` \n"
+                "------------------------------------\n"
+                f"💰 **Tổng Cashback chờ trả khách ({int(CASHBACK_RATE*100)}%):** `{total_cashback_given:,.0f} VNĐ`\n"
+                f"💵 **Lợi nhuận Admin tích lũy ({int((1-CASHBACK_RATE)*100)}%):** `{admin_profit_est:,.0f} VNĐ`\n"
+                "------------------------------------\n"
+                "📌 *Gõ `/danhsach` để xem chi tiết từng người dùng.*"
+            )
+            bot.reply_to(message, report_msg, parse_mode="Markdown")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Lỗi lấy báo cáo: {str(e)}")
+
     @bot.message_handler(commands=['congtien'])
     def cong_tien(message):
         if str(message.from_user.id) != str(ADMIN_ID): return
@@ -148,7 +251,7 @@ if bot:
             old_orders.append(order_entry)
             
             save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-            bot.reply_to(message, f"✅ Đã cộng {amount:,.0f} VNĐ cho ID {target_id}")
+            bot.reply_to(message, f"✅ Đã cộng {amount:,.0f} VNĐ cho ID `{target_id}`", parse_mode="Markdown")
             try:
                 bot.send_message(target_id, f"🎉 Bạn vừa được Admin cộng +{amount:,.0f} VNĐ vào ví tích lũy!")
             except Exception:
@@ -197,7 +300,7 @@ if bot:
                 bot.reply_to(message, "📂 Chưa có khách hàng nào.")
                 return
 
-            msg = "📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ (90%):</b>\n\n"
+            msg = f"📋 <b>DANH SÁCH KHÁCH HÀNG & SỐ DƯ ({int(CASHBACK_RATE*100)}%):</b>\n\n"
             for info in users:
                 uid = info['id']
                 name = info.get("name", "Khách hàng")
@@ -224,7 +327,7 @@ if bot:
         except Exception:
             bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
 
-# --- 4. WEBHOOK NHẬN POSTBACK ĐƠN HÀNG TỪ ACCESSTRADE ---
+# --- 4. WEBHOOK NHẬN POSTBACK TỰ ĐỘNG TỪ ACCESSTRADE ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
@@ -237,13 +340,13 @@ def webhook():
     order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
 
     if not target_id and not comm_str:
-        return "Bot Accesstrade đang chạy bình thường!", 200
+        return "Server Bot Cashback đang hoạt động bình thường!", 200
 
     if target_id and comm_str and bot:
         try:
             target_id = str(target_id).strip()
             total_comm = float(comm_str)
-            cashback = int(total_comm * 0.90)
+            cashback = int(total_comm * CASHBACK_RATE)
             admin_profit = int(total_comm - cashback)
             status_clean = str(status).lower().strip()
 
@@ -272,11 +375,11 @@ def webhook():
                     try:
                         bot.send_message(
                             ADMIN_ID,
-                            f"🔻 **BÁO CÓ ĐƠN HÀNG BỊ HỦY (ACCESSTRADE)!**\n\n"
+                            f"🔻 **BÁO ĐƠN HÀNG BỊ HỦY (ACCESSTRADE)!**\n\n"
                             f"👤 ID Khách: `{target_id}`\n"
                             f"📦 Mã đơn: `{order_id}`\n"
-                            f"🔻 Trừ hoàn khách (90%): -{cashback:,.0f} VNĐ\n"
-                            f"🔻 Lợi nhuận Admin giảm (10%): -{admin_profit:,.0f} VNĐ",
+                            f"🔻 Trừ hoàn khách ({int(CASHBACK_RATE*100)}%): -{cashback:,.0f} VNĐ\n"
+                            f"🔻 Lợi nhuận Admin giảm ({int((1-CASHBACK_RATE)*100)}%): -{admin_profit:,.0f} VNĐ",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
@@ -293,7 +396,7 @@ def webhook():
                         target_id, 
                         f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
                         f"📦 Mã đơn: `{order_id}`\n"
-                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** (90% hoa hồng) vào ví tích lũy!",
+                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** vào ví tích lũy!",
                         parse_mode="Markdown"
                     )
                 except Exception as e:
@@ -311,8 +414,8 @@ def webhook():
                             f"🆔 ID Khách: `{target_id}`\n"
                             f"📦 Mã đơn: `{order_id}`\n"
                             f"💰 Hoa hồng Accesstrade: {int(total_comm):,} VNĐ\n"
-                            f"🎁 Hoàn cho khách (90%): +{cashback:,.0f} VNĐ\n"
-                            f"💵 Lợi nhuận Admin (10%): +{admin_profit:,.0f} VNĐ",
+                            f"🎁 Hoàn cho khách ({int(CASHBACK_RATE*100)}%): +{cashback:,.0f} VNĐ\n"
+                            f"💵 Lợi nhuận Admin ({int((1-CASHBACK_RATE)*100)}%): +{admin_profit:,.0f} VNĐ",
                             parse_mode="Markdown"
                         )
                     except Exception as e:
@@ -323,23 +426,23 @@ def webhook():
 
     return "OK", 200
 
-# --- 5. KHỞI CHẠY BACKGROUND BOT THREAD & SERVER ---
+# --- 5. KHỞI CHẠY THREAD BOT & FLASK SERVER ---
 def run_bot():
     if not bot:
-        print("❌ Chưa có TOKEN Bot.")
+        print("❌ Chưa cấu hình TOKEN Bot.")
         return
-    print("🤖 Bot Telegram đang bắt đầu Polling...")
+    print("🤖 Bot Telegram đang kết nối Polling...")
     
     try:
         bot.remove_webhook()
     except Exception as e:
-        print(f"Cảnh báo xóa webhook: {e}")
+        print(f"Xóa webhook thành công: {e}")
 
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
         except Exception as e:
-            print(f"❌ Lỗi Bot Polling: {e}. Đang thử kết nối lại sau 5 giây...")
+            print(f"❌ Lỗi Bot Polling: {e}. Thử lại sau 5 giây...")
             time.sleep(5)
 
 threading.Thread(target=run_bot, daemon=True).start()
