@@ -1,9 +1,13 @@
 import os
+import hmac
+import hashlib
+import json
 import threading
 import time
 from datetime import datetime
 from urllib.parse import quote
 from flask import Flask, request
+import requests
 import telebot
 
 # --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
@@ -11,6 +15,10 @@ TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
+
+# Biến môi trường RioHub & Accesstrade
+RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
+RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
 
 # Tỷ lệ hoàn tiền cho khách (Mặc định 90% -> Admin hưởng 10%)
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
@@ -36,6 +44,7 @@ else:
     except Exception as e:
         supabase_error = f"Lỗi khởi tạo Supabase: {str(e)}"
         print(f"❌ {supabase_error}")
+
 
 # --- 2. HÀM TƯƠNG TÁC CƠ SỞ DỮ LIỆU SUPABASE ---
 def get_user(user_id):
@@ -78,7 +87,7 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
         print("Lỗi ghi dữ liệu user Supabase:", e)
 
 def log_click(user_id, raw_url):
-    """Ghi nhận thông tin click vào bảng clicks trên Supabase để đo CVR"""
+    """Ghi nhận thông tin click vào bảng clicks trên Supabase"""
     if not supabase:
         return
     try:
@@ -91,7 +100,40 @@ def log_click(user_id, raw_url):
     except Exception as e:
         print("Lưu thông tin Click gặp sự cố:", e)
 
-# --- 3. CÁC CÂU LỆNH TELEGRAM BOT ---
+
+# --- 3. HÀM CHUYỂN ĐỔI LINK RIOHUB (TIKTOK SHOP) ---
+def convert_link_riohub(original_url, user_id):
+    """Gọi API RioHub để lấy link affiliate TikTok Shop kèm sub_id=user_id"""
+    if not RIOHUB_API_KEY:
+        print("⚠️ Chưa cài RIOHUB_API_KEY trên Render")
+        return None
+
+    endpoint = "https://riohub.vn/api/v1/partner/tiktok/affiliate/links"
+    headers = {
+        "X-Riohub-Api-Key": RIOHUB_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "product_url": original_url,
+        "sub_id": str(user_id)
+    }
+
+    try:
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+        if response.status_code == 200:
+            res_data = response.json()
+            if res_data.get("status") == "success" or "affiliate_link" in res_data or "link" in res_data:
+                return res_data.get("affiliate_link") or res_data.get("link") or res_data.get("data", {}).get("affiliate_link")
+            print("Lỗi API RioHub trả về:", res_data)
+        else:
+            print(f"Lỗi gọi API RioHub HTTP {response.status_code}: {response.text}")
+    except Exception as e:
+        print("Sự cố khi gọi API RioHub:", e)
+
+    return None
+
+
+# --- 4. CÁC CÂU LỆNH TELEGRAM BOT ---
 if bot:
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
@@ -169,16 +211,20 @@ if bot:
     def convert_link(message):
         uid = message.from_user.id
         raw_url = message.text.strip()
-        encoded_url = quote(raw_url, safe='')
         
-        # Ghi nhận Click để đếm CVR
+        # Ghi nhận Click đếm CVR
         log_click(uid, raw_url)
         
-        # Phân loại chiến dịch Shopee / TikTok Shop
+        # PHÂN LOẠI TIKTOK SHOP (RIOHUB) HOẶC SHOPEE (ACCESSTRADE)
         if "tiktok" in raw_url.lower():
-            campaign_path = "7073909970291373175/6648523843406889655"  # TikTok Shop
-            afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
+            afflink = convert_link_riohub(raw_url, uid)
+            # Dự phòng nếu API RioHub chưa hoạt động thì chuyển sang link Accesstrade cũ
+            if not afflink:
+                encoded_url = quote(raw_url, safe='')
+                campaign_path = "7073909970291373175/6648523843406889655"
+                afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub_id={uid}"
         else:
+            encoded_url = quote(raw_url, safe='')
             campaign_path = "7073909970291373175/4751584435713464237"  # Shopee
             afflink = f"https://go.isclix.com/deep_link/{campaign_path}?url={encoded_url}&sub4=oneatweb&sub_id={uid}"
         
@@ -190,32 +236,24 @@ if bot:
             parse_mode="HTML"
         )
 
-    # --- HỆ THỐNG LỆNH ADMIN (BOSS QUẢN LÝ) ---
-
+    # --- HỆ THỐNG LỆNH ADMIN ---
     @bot.message_handler(commands=['baocao', 'stats'])
     def view_report(message):
-        """Báo cáo Thống kê CVR & Doanh thu chuẩn dạng Dashboard"""
         if str(message.from_user.id) != str(ADMIN_ID): return
         if not supabase:
             bot.reply_to(message, "❌ Chưa kết nối CSDL Supabase!")
             return
 
         try:
-            # 1. Đếm tổng lượt click
             click_res = supabase.table('clicks').select('id', count='exact').execute()
             total_clicks = click_res.count if click_res.count is not None else 0
 
-            # 2. Lấy dữ liệu danh sách khách hàng & thống kê ví
             user_res = supabase.table('users').select('*').execute()
             users = user_res.data or []
             
             total_users = len(users)
             total_cashback_given = sum([u.get('balance', 0) for u in users])
-            
-            # Tính ước lượng doanh thu Admin giữ lại (10%)
-            # Cashback = 90% -> Total Comm = Cashback / 0.9 -> Admin Profit = Total Comm * 0.1
             admin_profit_est = (total_cashback_given / CASHBACK_RATE) * (1.0 - CASHBACK_RATE) if CASHBACK_RATE > 0 else 0
-
             cvr = (total_users / total_clicks * 100) if total_clicks > 0 else 0
 
             report_msg = (
@@ -327,127 +365,82 @@ if bot:
         except Exception:
             bot.reply_to(message, "⚠️ Cú pháp: `/nhan <ID_KHÁCH> <NỘI_DUNG>`", parse_mode="Markdown")
 
-# --- 4. WEBHOOK NHẬN POSTBACK TỰ ĐỘNG TỪ ACCESSTRADE ---
+
+# --- 5. WEBHOOK NHẬN POSTBACK TỰ ĐỘNG TỪ RIOHUB & ACCESSTRADE ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
     if request.method == 'HEAD':
         return "", 200
 
-    target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
-    comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('money')
-    status = request.args.get('status') or request.args.get('state') or 'success'
-    order_id = request.args.get('order_id') or request.args.get('order_code') or 'Mới'
-
-    if not target_id and not comm_str:
-        return "Server Bot Cashback đang hoạt động bình thường!", 200
-
-    if target_id and comm_str and bot:
+    # --- 5.1. XỬ LÝ DỮ LIỆU TỪ RIOHUB (POST JSON) ---
+    if request.is_json or request.method == 'POST':
         try:
-            target_id = str(target_id).strip()
-            total_comm = float(comm_str)
-            cashback = int(total_comm * CASHBACK_RATE)
-            admin_profit = int(total_comm - cashback)
-            status_clean = str(status).lower().strip()
-
-            user = get_user(target_id)
-            old_bal = user.get("balance", 0) if user else 0
-            old_orders = user.get("orders", []) if user else []
-
-            # XỬ LÝ ĐƠN HỦY / TRẢ HÀNG
-            if status_clean in ["cancel", "cancelled", "0", "reject", "rejected"]:
-                new_bal = max(0, old_bal - cashback)
-                old_orders.append(f"❌ Hủy/Hoàn đơn #{order_id}: -{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-
-                try:
-                    bot.send_message(
-                        target_id,
-                        f"⚠️ **CẬP NHẬT: ĐƠN HÀNG BỊ HỦY / TRẢ HÀNG!**\n\n"
-                        f"📦 Mã đơn: `{order_id}`\n"
-                        f"🔻 Khấu trừ: **-{cashback:,.0f} VNĐ** khỏi ví tích lũy.",
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    print(f"Lỗi gửi tin nhắn khách: {e}")
-
-                if ADMIN_ID:
-                    try:
-                        bot.send_message(
-                            ADMIN_ID,
-                            f"🔻 **BÁO ĐƠN HÀNG BỊ HỦY (ACCESSTRADE)!**\n\n"
-                            f"👤 ID Khách: `{target_id}`\n"
-                            f"📦 Mã đơn: `{order_id}`\n"
-                            f"🔻 Trừ hoàn khách ({int(CASHBACK_RATE*100)}%): -{cashback:,.0f} VNĐ\n"
-                            f"🔻 Lợi nhuận Admin giảm ({int((1-CASHBACK_RATE)*100)}%): -{admin_profit:,.0f} VNĐ",
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        print(f"Lỗi gửi tin nhắn Admin: {e}")
-
-            # XỬ LÝ ĐƠN MỚI THÀNH CÔNG
-            else:
-                new_bal = old_bal + cashback
-                old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-
-                try:
-                    bot.send_message(
-                        target_id, 
-                        f"🎉 **ĐƠN HÀNG MỚI ĐƯỢC GHI NHẬN!**\n\n"
-                        f"📦 Mã đơn: `{order_id}`\n"
-                        f"💰 Bạn được cộng **+{cashback:,.0f} VNĐ** vào ví tích lũy!",
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    print(f"Lỗi gửi tin nhắn khách: {e}")
-
-                if ADMIN_ID:
-                    try:
-                        client_name = user.get("name", "Khách hàng") if user else "Khách hàng"
-                        client_link = f"tg://user?id={target_id}"
-
-                        bot.send_message(
-                            ADMIN_ID,
-                            f"🔔 *CÓ ĐƠN HÀNG MỚI TỪ KHÁCH (ACCESSTRADE)!*\n\n"
-                            f"👤 *Khách hàng:* [{client_name}]({client_link})\n"
-                            f"🆔 ID Khách: `{target_id}`\n"
-                            f"📦 Mã đơn: `{order_id}`\n"
-                            f"💰 Hoa hồng Accesstrade: {int(total_comm):,} VNĐ\n"
-                            f"🎁 Hoàn cho khách ({int(CASHBACK_RATE*100)}%): +{cashback:,.0f} VNĐ\n"
-                            f"💵 Lợi nhuận Admin ({int((1-CASHBACK_RATE)*100)}%): +{admin_profit:,.0f} VNĐ",
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        print(f"Lỗi gửi tin nhắn Admin: {e}")
-
-        except Exception as e:
-            print(f"Lỗi xử lý Postback: {e}")
-
-    return "OK", 200
-
-# --- 5. KHỞI CHẠY THREAD BOT & FLASK SERVER ---
-def run_bot():
-    if not bot:
-        print("❌ Chưa cấu hình TOKEN Bot.")
-        return
-    print("🤖 Bot Telegram đang kết nối Polling...")
-    
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        print(f"Xóa webhook thành công: {e}")
-
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
-        except Exception as e:
-            print(f"❌ Lỗi Bot Polling: {e}. Thử lại sau 5 giây...")
-            time.sleep(5)
-
-threading.Thread(target=run_bot, daemon=True).start()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+            body_bytes = request.get_data()
+            data = json.loads(body_bytes.decode('utf-8')) if body_bytes else {}
             
+            if data and ("event" in data or "order_id" in data or "commission" in data):
+                target_id = str(data.get("sub_id") or data.get("trace_id") or "").strip()
+                comm = float(data.get("commission") or data.get("pub_commission") or 0)
+                order_id = str(data.get("order_id") or data.get("id") or "Mới")
+                event_type = str(data.get("event") or "").lower()
+
+                if target_id and comm > 0 and bot:
+                    cashback = int(comm * CASHBACK_RATE)
+                    admin_profit = int(comm - cashback)
+
+                    user = get_user(target_id)
+                    old_bal = user.get("balance", 0) if user else 0
+                    old_orders = user.get("orders", []) if user else []
+
+                    # ĐƠN HỦY / HOÀN TỪ RIOHUB
+                    if event_type in ["order.refunded", "cancelled", "rejected"]:
+                        new_bal = max(0, old_bal - cashback)
+                        old_orders.append(f"❌ Hủy/Hoàn đơn RioHub #{order_id}: -{cashback:,.0f} VNĐ")
+                        save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                        try:
+                            bot.send_message(
+                                target_id,
+                                f"⚠️ **CẬP NHẬT: ĐƠN HÀNG RIOHUB BỊ HỦY / TRẢ!**\n\n📦 Mã đơn: `{order_id}`\n🔻 Khấu trừ: **-{cashback:,.0f} VNĐ**",
+                                parse_mode="Markdown"
+                            )
+                        except Exception: pass
+
+                        if ADMIN_ID:
+                            try:
+                                bot.send_message(
+                                    ADMIN_ID,
+                                    f"🔻 **BÁO HỦY ĐƠN RIOHUB!**\n👤 ID: `{target_id}` | Mã đơn: `{order_id}`\n🔻 Trừ khách: -{cashback:,.0f} VNĐ",
+                                    parse_mode="Markdown"
+                                )
+                            except Exception: pass
+
+                    # ĐƠN MỚI HOẶC CẬP NHẬT HOA HỒNG THÀNH CÔNG
+                    else:
+                        new_bal = old_bal + cashback
+                        old_orders.append(f"🛒 Hoàn tiền RioHub #{order_id}: +{cashback:,.0f} VNĐ")
+                        save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+
+                        try:
+                            bot.send_message(
+                                target_id,
+                                f"🎉 **ĐƠN HÀNG TIKTOK SHOP ĐƯỢC GHI NHẬN!**\n\n📦 Mã đơn: `{order_id}`\n💰 Bạn được cộng **+{cashback:,.0f} VNĐ** vào ví!",
+                                parse_mode="Markdown"
+                            )
+                        except Exception: pass
+
+                        if ADMIN_ID:
+                            try:
+                                client_name = user.get("name", "Khách hàng") if user else "Khách hàng"
+                                bot.send_message(
+                                    ADMIN_ID,
+                                    f"🔔 *CÓ ĐƠN TIKTOK SHOP MỚI (RIOHUB)!*\n\n"
+                                    f"👤 *Khách:* [{client_name}](tg://user?id={target_id})\n"
+                                    f"🆔 ID Khách: `{target_id}`\n📦 Mã đơn: `{order_id}`\n"
+                                    f"💰 Tổng hoa hồng: {int(comm):,} VNĐ\n"
+                                    f"🎁 Hoàn khách ({int(CASHBACK_RATE*100)}%): +{cashback:,.0f} VNĐ\n"
+                                    f"💵 Lợi nhuận Admin: +{admin_profit:,.0f} VNĐ",
+                                    parse_mode="Markdown"
+                                )
+                            except Exception: 
