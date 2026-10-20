@@ -405,7 +405,8 @@ def webhook():
                                 f"⚠️ **CẬP NHẬT: ĐƠN HÀNG RIOHUB BỊ HỦY / TRẢ!**\n\n📦 Mã đơn: `{order_id}`\n🔻 Khấu trừ: **-{cashback:,.0f} VNĐ**",
                                 parse_mode="Markdown"
                             )
-                        except Exception: pass
+                        except Exception:
+                            pass
 
                         if ADMIN_ID:
                             try:
@@ -414,7 +415,8 @@ def webhook():
                                     f"🔻 **BÁO HỦY ĐƠN RIOHUB!**\n👤 ID: `{target_id}` | Mã đơn: `{order_id}`\n🔻 Trừ khách: -{cashback:,.0f} VNĐ",
                                     parse_mode="Markdown"
                                 )
-                            except Exception: pass
+                            except Exception:
+                                pass
 
                     # ĐƠN MỚI HOẶC CẬP NHẬT HOA HỒNG THÀNH CÔNG
                     else:
@@ -428,7 +430,8 @@ def webhook():
                                 f"🎉 **ĐƠN HÀNG TIKTOK SHOP ĐƯỢC GHI NHẬN!**\n\n📦 Mã đơn: `{order_id}`\n💰 Bạn được cộng **+{cashback:,.0f} VNĐ** vào ví!",
                                 parse_mode="Markdown"
                             )
-                        except Exception: pass
+                        except Exception:
+                            pass
 
                         if ADMIN_ID:
                             try:
@@ -441,6 +444,4 @@ def webhook():
                                     f"💰 Tổng hoa hồng: {int(comm):,} VNĐ\n"
                                     f"🎁 Hoàn khách ({int(CASHBACK_RATE*100)}%): +{cashback:,.0f} VNĐ\n"
                                     f"💵 Lợi nhuận Admin: +{admin_profit:,.0f} VNĐ",
-                                    parse_mode="Markdown"
-                                )
-                            except Exception: 
+                                    parse_mode="Ma
