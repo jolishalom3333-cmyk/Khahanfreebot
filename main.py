@@ -1,27 +1,42 @@
 import os
+import re
 import json
-import threading
 import time
+import threading
 from datetime import datetime
 from urllib.parse import quote
 from flask import Flask, request
 import requests
 import telebot
 
-# --- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG ---
+# ==========================================
+# 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & KHỞI TẠO
+# ==========================================
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('BOT_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
+SHOPEE_COOKIE = os.environ.get('SHOPEE_COOKIE', '').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
-RIOHUB_SIGNING_SECRET = os.environ.get('RIOHUB_SIGNING_SECRET', '').strip()
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
+
+# Creator username kết nối trên RioHub (có thể đổi qua biến môi trường)
+CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'pheejzoo1564').strip()
+
+# Danh sách Base URL dự phòng của RioHub theo Spec 09/10/2026
+RIOHUB_BASE_URLS = [
+    "https://riohub.vn/api/v1",
+    "https://riohub.riokupon.com/api/v1",
+    "https://riohub.riokupon.me/api/v1"
+]
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 app = Flask(__name__)
 
-# Kết nối CSDL Supabase
+# ==========================================
+# 2. KẾT NỐI CƠ SỞ DỮ LIỆU SUPABASE
+# ==========================================
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
@@ -74,46 +89,127 @@ def log_click(user_id, raw_url):
     except Exception:
         pass
 
-def expand_url(short_url):
-    try:
-        session = requests.Session()
-        session.headers.update({"User-Agent": "Mozilla/5.0"})
-        res = session.get(short_url, allow_redirects=True, timeout=8)
-        return res.url
-    except Exception:
-        return short_url
+# ==========================================
+# 3. HÀM XỬ LÝ CHUYỂN ĐỔI LINK AFFILIATE
+# ==========================================
 
-def convert_link_riohub(original_url, user_id):
-    if not RIOHUB_API_KEY: return None
-    target_url = expand_url(original_url) if "vt.tiktok.com" in original_url else original_url
-    endpoint = "https://riohub.vn/api/v1/partner/tiktok/affiliate/links"
+def validate_sub_id(sub_id: str) -> bool:
+    """ Kiểm tra quy tắc sub_id theo Spec RioHub: 1-128 ký tự [A-Za-z0-9_-], tối đa 4 sub phân tách bằng '-' """
+    if not sub_id or not (1 <= len(sub_id) <= 128):
+        return False
+    if not re.match(r'^[A-Za-z0-9_.-]+$', sub_id):
+        return False
+    parts = sub_id.split('-')
+    if len(parts) > 5:
+        return False
+    return True
+
+def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
+    """ Tạo link TikTok qua API RioHub chuẩn Spec 09/10/2026 """
+    sub_id_str = str(sub_id)
+    if not validate_sub_id(sub_id_str):
+        print(f"❌ Lỗi sub_id không hợp lệ: {sub_id_str}")
+        return None, "Lỗi sub_id không hợp lệ theo quy chuẩn!"
+
+    if not RIOHUB_API_KEY:
+        print("❌ Chưa cấu hình RIOHUB_API_KEY!")
+        return None, "Hệ thống chưa cài đặt RIOHUB_API_KEY!"
+
+    endpoint = "/partner/tiktok/affiliate/links"
+    payload = {
+        "creator_username": CREATOR_USERNAME,
+        "sub_id": sub_id_str
+    }
+    
+    if str(product_url_or_id).startswith("http"):
+        payload["product_url"] = product_url_or_id
+    else:
+        payload["product_id"] = str(product_url_or_id)
+
     headers = {
-        "X-Riohub-Api-Key": RIOHUB_API_KEY.strip(),
-        "Authorization": f"Bearer {RIOHUB_API_KEY.strip()}",
+        "X-Riohub-Api-Key": RIOHUB_API_KEY,
         "Content-Type": "application/json"
     }
+
+    # Vòng lặp chuyển Base URL nếu lỗi kết nối/DNS/timeout
+    for base_url in RIOHUB_BASE_URLS:
+        url = base_url + endpoint
+        for attempt in range(3):
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=10)
+                print(f"🔎 [RioHub Status Code]: {res.status_code}")
+                
+                # Bị giới hạn tần suất 429 -> Tự chờ Retry-After rồi thử lại
+                if res.status_code == 429:
+                    retry_after = int(res.headers.get("Retry-After", 2))
+                    print(f"⚠️ RioHub 429 Rate Limited, chờ {retry_after}s...")
+                    time.sleep(retry_after)
+                    continue
+
+                # Lỗi nghiệp vụ 422
+                if res.status_code == 422:
+                    err_data = res.json()
+                    err_code = err_data.get("error", {}).get("code", "")
+                    if err_code == "product_not_promotable" or "product_not_promotable" in res.text:
+                        return None, "Sản phẩm này hiện không có hoa hồng, chưa được shop duyệt hoặc bị TikTok hạn chế!"
+                    return None, f"Lỗi 422: {err_data.get('message', 'Tham số không hợp lệ')}"
+
+                if res.status_code in [401, 403, 404]:
+                    return None, f"Lỗi xác thực RioHub ({res.status_code})! Vui lòng báo Admin kiểm tra API Key."
+
+                if res.status_code == 200:
+                    data = res.json()
+                    aff_link = data.get("affiliate_link")
+                    if aff_link:
+                        return aff_link, None
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                print(f"⚠️ Kết nối tới {base_url} thất bại, đang thử server dự phòng tiếp theo...")
+                break # Chuyển sang base_url kế tiếp trong danh sách
+            except Exception as e:
+                print("❌ Lỗi gọi RioHub API:", e)
+                return None, "Đã có lỗi xảy ra khi kết nối tới RioHub!"
+
+    return None, "Không thể kết nối tới máy chủ RioHub!"
+
+def convert_shopee_cookie(original_url, user_id):
+    """ Tạo link Shopee bằng Cookie GraphQL """
+    if not SHOPEE_COOKIE:
+        print("❌ Chưa cấu hình SHOPEE_COOKIE!")
+        return None
+        
+    url = "https://affiliate.shopee.vn/api/v3/gql"
+    headers = {
+        "Cookie": SHOPEE_COOKIE,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
     payload = {
-        "product_url": target_url,
-        "sub_id": str(user_id),
-        "trace_id": str(user_id)
+        "query": """
+        mutation CustomLink($url: String!,$subId: String) {
+            generateCustomLink(input: { originUrl: $url, subId1:$subId }) {
+                shortLink
+            }
+        }
+        """,
+        "variables": {"url": original_url, "subId": str(user_id)}
     }
     try:
-        res = requests.post(endpoint, json=payload, headers=headers, timeout=10)
-        print("🔎 [RioHub Status Code]:", res.status_code)
-        print("🔎 [RioHub Raw Body]:", res.text)
-        if res.status_code == 200:
-            res_data = res.json()
-            return (
-                res_data.get("affiliate_link") or 
-                res_data.get("link") or 
-                res_data.get("data", {}).get("affiliate_link") or 
-                res_data.get("data", {}).get("link") or
-                res_data.get("result", {}).get("affiliate_link")
-            )
+        res = requests.post(url, json=payload, headers=headers, timeout=8)
+        data = res.json()
+        if "data" in data and data["data"] and data["data"]["generateCustomLink"]:
+            return data["data"]["generateCustomLink"]["shortLink"]
+        elif "errors" in data or res.status_code in [401, 403]:
+            if bot and ADMIN_ID:
+                try: bot.send_message(ADMIN_ID, "⚠️ Cookie Shopee trên Render đã hết hạn! Hãy cập nhật Cookie mới nhé.")
+                except: pass
     except Exception as e:
-        print("Lỗi RioHub API:", e)
+        print("❌ Lỗi Shopee Cookie:", e)
     return None
 
+# ==========================================
+# 4. BOT TELEGRAM HANDLERS & LỆNH
+# ==========================================
 if bot:
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
@@ -164,29 +260,46 @@ if bot:
         raw_url = message.text.strip()
         log_click(uid, raw_url)
         
-        if "tiktok" in raw_url.lower():
-            afflink = convert_link_riohub(raw_url, uid)
-            if not afflink:
-                encoded_url = quote(raw_url, safe='')
-                afflink = f"https://go.isclix.com/deep_link/7073909970291373175/6648523843406889655?url={encoded_url}&sub_id={uid}"
-        else:
-            encoded_url = quote(raw_url, safe='')
-            afflink = f"https://go.isclix.com/deep_link/7073909970291373175/4751584435713464237?url={encoded_url}&sub4=oneatweb&sub_id={uid}"
+        afflink = None
+        platform = ""
         
-        bot.reply_to(message, f"🛍️ <a href='{afflink}'><b>BẤM VÀO ĐÂY ĐỂ MUA HÀNG HOÀN TIỀN</b></a>", parse_mode="HTML")
+        # 1. Link TikTok Shop
+        if "tiktok" in raw_url.lower():
+            platform = "TikTok Shop"
+            afflink, err_msg = convert_tiktok_riohub(raw_url, uid)
+            if not afflink:
+                bot.reply_to(message, f"❌ **Lỗi TikTok:** {err_msg or 'Không thể tạo link qua RioHub.'}", parse_mode="Markdown")
+                return
 
+        # 2. Link Shopee
+        elif "shopee" in raw_url.lower() or "shp.ee" in raw_url.lower():
+            platform = "Shopee"
+            afflink = convert_shopee_cookie(raw_url, uid)
+            if not afflink:
+                bot.reply_to(message, "❌ **Lỗi Shopee:** Cookie hết hạn hoặc không hợp lệ. Vui lòng báo Admin!", parse_mode="Markdown")
+                return
+        else:
+            bot.reply_to(message, "⚠️ Bot hiện chỉ hỗ trợ tạo link mua hàng cho **Shopee** và **TikTok Shop**!", parse_mode="Markdown")
+            return
+            
+        bot.reply_to(message, f"🛍️ <a href='{afflink}'><b>BẤM VÀO ĐÂY ĐỂ MUA HÀNG HOÀN TIỀN ({platform})</b></a>", parse_mode="HTML")
+
+# ==========================================
+# 5. FLASK WEBHOOK POSTBACK (CỘNG TIỀN ĐƠN HÀNG)
+# ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
-    if request.method == 'HEAD':
+    if request.method == 'HEAD': 
         return "", 200
 
     if request.is_json or request.method == 'POST':
         try:
             data = request.get_json(silent=True) or {}
             if data:
-                target_id = str(data.get("sub_id") or data.get("trace_id") or "").strip()
-                comm = float(data.get("commission") or data.get("pub_commission") or 0)
+                # Đọc dữ liệu POSTBACK theo chuẩn RioHub & Shopee
+                target_id = str(data.get("sub_id") or data.get("trace_id") or data.get("subid") or "").strip()
+                comm = float(data.get("commission") or data.get("pub_commission") or data.get("est_commission") or 0)
                 order_id = str(data.get("order_id") or data.get("id") or "Mới")
                 event_type = str(data.get("event") or "").lower()
 
@@ -196,24 +309,28 @@ def webhook():
                     old_bal = user.get("balance", 0) if user else 0
                     old_orders = user.get("orders", []) if user else []
 
-                    if event_type in ["order.refunded", "cancelled", "rejected"]:
+                    # Xử lý khi đơn bị hủy/hoàn tiền
+                    if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
                         new_bal = max(0, old_bal - cashback)
                         old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
                         save_or_update_user(target_id, balance=new_bal, orders=old_orders)
+                        try:
+                            bot.send_message(target_id, f"❌ **ĐƠN HÀNG BỊ HỦY/HOÀN!**\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}", parse_mode="Markdown")
+                        except Exception: pass
                     else:
                         new_bal = old_bal + cashback
                         old_orders.append(f"🛒 Hoàn tiền #{order_id}: +{cashback:,.0f} VNĐ")
                         save_or_update_user(target_id, balance=new_bal, orders=old_orders)
                         try:
-                            bot.send_message(target_id, f"🎉 **CỘNG TIỀN HOÀN!**\n💰 +{cashback:,.0f} VNĐ", parse_mode="Markdown")
-                        except Exception:
-                            pass
+                            bot.send_message(target_id, f"🎉 **CỘNG TIỀN HOÀN!**\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}", parse_mode="Markdown")
+                        except Exception: pass
                 return "OK", 200
-        except Exception:
-            pass
+        except Exception as e:
+            print("Lỗi xử lý Postback:", e)
 
+    # Hỗ trợ nhận GET Postback
     target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
-    comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('money')
+    comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('est_commission')
     if target_id and comm_str and bot:
         try:
             total_comm = float(comm_str)
@@ -226,20 +343,17 @@ def webhook():
             old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
             save_or_update_user(target_id, balance=new_bal, orders=old_orders)
             try:
-                bot.send_message(target_id, f"🎉 **CỘNG TIỀN HOÀN SHOPEE!**\n💰 +{cashback:,.0f} VNĐ", parse_mode="Markdown")
-            except Exception:
-                pass
-        except Exception:
-            pass
+                bot.send_message(target_id, f"🎉 **CỘNG TIỀN HOÀN!**\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}", parse_mode="Markdown")
+            except Exception: pass
+        except Exception: pass
 
-    return "Server đang chạy mượt mà!", 200
+    return "Server Cashback đang hoạt động mượt mà!", 200
 
+# Run Bot trên luồng riêng
 def run_bot():
     if not bot: return
-    try:
-        bot.remove_webhook()
-    except Exception:
-        pass
+    try: bot.remove_webhook()
+    except Exception: pass
     while True:
         try:
             bot.infinity_polling(skip_pending=True, timeout=20)
