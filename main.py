@@ -173,7 +173,7 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
     return None, "Không thể kết nối tới máy chủ RioHub!"
 
 def convert_shopee_cookie(original_url, user_id):
-    """ Tạo link Shopee bằng Cookie GraphQL """
+    """ Tạo link Shopee bằng Cookie GraphQL với headers giả lập đầy đủ """
     if not SHOPEE_COOKIE:
         print("❌ Chưa cấu hình SHOPEE_COOKIE!")
         return None
@@ -182,7 +182,12 @@ def convert_shopee_cookie(original_url, user_id):
     headers = {
         "Cookie": SHOPEE_COOKIE,
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://affiliate.shopee.vn/",
+        "Origin": "https://affiliate.shopee.vn",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty"
     }
     payload = {
         "query": """
@@ -195,13 +200,16 @@ def convert_shopee_cookie(original_url, user_id):
         "variables": {"url": original_url, "subId": str(user_id)}
     }
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=8)
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"🔎 [Shopee API Status]: {res.status_code}")
+        
         data = res.json()
-        if "data" in data and data["data"] and data["data"]["generateCustomLink"]:
+        if "data" in data and data["data"] and data["data"].get("generateCustomLink"):
             return data["data"]["generateCustomLink"]["shortLink"]
-        elif "errors" in data or res.status_code in [401, 403]:
+        else:
+            print(f"⚠️ Shopee trả về lỗi dữ liệu: {data}")
             if bot and ADMIN_ID:
-                try: bot.send_message(ADMIN_ID, "⚠️ Cookie Shopee trên Render đã hết hạn! Hãy cập nhật Cookie mới nhé.")
+                try: bot.send_message(ADMIN_ID, "⚠️ Cookie Shopee trên Render đã hết hạn hoặc bị chặn! Hãy cập nhật Cookie mới nhé.")
                 except: pass
     except Exception as e:
         print("❌ Lỗi Shopee Cookie:", e)
@@ -365,4 +373,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
+                
