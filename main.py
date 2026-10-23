@@ -24,7 +24,7 @@ CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
 # Creator username kết nối trên RioHub
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
-# Danh sách Base URL chính thức của RioHub[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
+# Danh sách Base URL chính thức và dự phòng của RioHub theo Spec
 RIOHUB_BASE_URLS = [
     "https://riohub.vn/api/v1",
     "https://riohub.riokupon.com/api/v1",
@@ -94,7 +94,11 @@ def log_click(user_id, raw_url):
 # ==========================================
 
 def validate_sub_id(sub_id: str) -> bool:
-    """ Kiểm tra quy tắc sub_id theo chuẩn RioHub """
+    """
+    Kiểm tra quy tắc sub_id phía client theo Spec RioHub:
+    - 1–128 ký tự [A-Za-z0-9_-]
+    - Tối đa 4 dấu phân tách '-' (chia tối đa thành các phần, giá trị mỗi phần không chứa '-')
+    """
     if not sub_id or not (1 <= len(sub_id) <= 128):
         return False
     if not re.match(r'^[A-Za-z0-9_.-]+$', sub_id):
@@ -104,12 +108,18 @@ def validate_sub_id(sub_id: str) -> bool:
         return False
     return True
 
-def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
-    """ Tạo link TikTok qua API RioHub có tự động mở rộng link rút gọn vt.tiktok.com[span_4](start_span)[span_4](end_span) """
-    sub_id_str = str(sub_id)
+def createAffiliateLink(product_url_or_id: str, sub_id: str):
+    """
+    Tạo link TikTok qua API RioHub chuẩn Spec:
+    - Tự động mở rộng link rút gọn vt.tiktok.com
+    - Kiểm tra sub_id chặt chẽ
+    - Xoay vòng Base URL khi lỗi mạng/timeout (không đổi domain khi gặp 4xx/5xx)
+    - Xử lý 429 Rate Limit dựa trên Retry-After
+    """
+    sub_id_str = str(sub_id).strip()
     if not validate_sub_id(sub_id_str):
         print(f"❌ Lỗi sub_id không hợp lệ: {sub_id_str}")
-        return None, "Lỗi sub_id không hợp lệ theo quy chuẩn!"
+        return None, "Lỗi: sub_id không đúng quy chuẩn (1-128 ký tự, tối đa 4 dấu '-')"
 
     if not RIOHUB_API_KEY:
         print("❌ Chưa cấu hình RIOHUB_API_KEY!")
@@ -125,11 +135,7 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
         except Exception as e:
             print(f"⚠️ Không thể mở rộng link rút gọn: {e}")
 
-    endpoints = [
-        "/partner/tiktok/affiliate/links",
-        "/partner/tiktok/affiliate/product-links"
-    ]
-    
+    endpoint = "/partner/tiktok/affiliate/links"
     payload = {
         "creator_username": CREATOR_USERNAME,
         "sub_id": sub_id_str
@@ -145,41 +151,53 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
         "Content-Type": "application/json"
     }
 
+    # Vòng lặp Base URL: chỉ chuyển domain khi lỗi kết nối / timeout / DNS
     for base_url in RIOHUB_BASE_URLS:
-        for endpoint in endpoints:
-            url = base_url + endpoint
-            for attempt in range(2):
-                try:
-                    res = requests.post(url, json=payload, headers=headers, timeout=10)
-                    print(f"🔎 [RioHub {endpoint}] Status Code: {res.status_code} - Response: {res.text[:150]}")
-                    
-                    if res.status_code == 429:
-                        retry_after = int(res.headers.get("Retry-After", 2))
-                        time.sleep(retry_after)
-                        continue
+        url = base_url + endpoint
+        for attempt in range(3):
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=10)
+                print(f"🔎 [RioHub Status Code]: {res.status_code} tại {base_url}")
+                
+                if res.status_code == 429:
+                    retry_after = int(res.headers.get("Retry-After", 2))
+                    print(f"⚠️ RioHub 429 Rate Limited, chờ {retry_after}s...")
+                    time.sleep(retry_after)
+                    continue
 
-                    if res.status_code == 422:
+                if res.status_code == 422:
+                    try:
                         err_data = res.json()
-                        return None, f"Lỗi 422: {err_data.get('message', 'Sản phẩm không hỗ trợ tạo link')}"
+                        err_code = err_data.get("error", {}).get("code", "")
+                        msg = err_data.get("message", "Tham số không hợp lệ")
+                    except:
+                        err_code, msg = "", res.text
+                        
+                    if err_code == "product_not_promotable" or "product_not_promotable" in res.text:
+                        return None, "Sản phẩm này hiện không có hoa hồng, chưa được shop duyệt hoặc bị TikTok hạn chế!"
+                    return None, f"Lỗi 422: {msg}"
 
-                    if res.status_code in [401, 403, 404]:
-                        if res.status_code == 404:
-                            break
-                        return None, f"Lỗi xác thực RioHub ({res.status_code})"
+                if res.status_code in [401, 403, 404]:
+                    return None, f"Lỗi xác thực RioHub ({res.status_code}): Kiểm tra lại API Key hoặc Creator Username."
 
-                    if res.status_code == 200:
-                        data = res.json()
-                        aff_link = data.get("affiliate_link") or data.get("short_link") or data.get("link")
-                        if aff_link:
-                            return aff_link, None
+                if res.status_code >= 500:
+                    return None, f"Lỗi máy chủ RioHub ({res.status_code})."
 
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                    break
-                except Exception as e:
-                    print("❌ Lỗi gọi RioHub API:", e)
-                    break
+                if res.status_code == 200:
+                    data = res.json()
+                    aff_link = data.get("affiliate_link")
+                    if aff_link:
+                        return aff_link, None
+                    return None, "API trả về thành công nhưng thiếu trường affiliate_link."
 
-    return None, "Không thể kết nối tới máy chủ RioHub hoặc link không hợp lệ!"
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.SSLError):
+                print(f"⚠️ Mất kết nối tới {base_url}, đang thử server dự phòng tiếp theo...")
+                break 
+            except Exception as e:
+                print(f"❌ Lỗi ngoại lệ khi gọi RioHub API: {e}")
+                return None, "Đã có lỗi xảy ra khi kết nối tới hệ thống RioHub!"
+
+    return None, "Không thể kết nối tới máy chủ RioHub (Lỗi mạng/DNS)!"
 
 def convert_shopee_cookie(original_url, user_id):
     """ Tạo link Shopee bằng Cookie GraphQL """
@@ -280,7 +298,7 @@ if bot:
         # 1. Link TikTok Shop
         if "tiktok" in raw_url.lower():
             platform = "TikTok Shop"
-            afflink, err_msg = convert_tiktok_riohub(raw_url, uid)
+            afflink, err_msg = createAffiliateLink(raw_url, uid)
             if not afflink:
                 bot.reply_to(message, f"❌ Lỗi TikTok: {err_msg or 'Không thể tạo link qua RioHub.'}")
                 return
@@ -378,4 +396,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
+            
