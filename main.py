@@ -4,7 +4,7 @@ import json
 import time
 import threading
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from flask import Flask, request
 import requests
 import telebot
@@ -18,7 +18,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID') or "8860640969"
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
-SHOPEE_COOKIE = os.environ.get('SHOPEE_COOKIE', '').strip()
+SHOPEE_AFFILIATE_ID = os.environ.get('SHOPEE_AFFILIATE_ID', '17317720169').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 ADDLIVETAG_API_KEY = os.environ.get('ADDLIVETAG_API_KEY', '').strip()
 
@@ -184,66 +184,48 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
 
     return None, "Không thể kết nối tới máy chủ RioHub!"
 
-def convert_shopee_addlivetag(original_url, user_id):
-    if not ADDLIVETAG_API_KEY:
-        return None
-    url = "https://addlivetag.com/api/v1/shopee/generate-link"
-    headers = {
-        "X-API-Key": ADDLIVETAG_API_KEY,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": original_url,
-        "sub_id": str(user_id)
-    }
-    try:
-        res = requests.post(url, json=payload, headers=headers, timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("short_link") or data.get("affiliate_link")
-    except Exception:
-        pass
-    return None
+def clean_shopee_url(raw_url: str) -> str:
+    """Mở rộng link ngắn s.shopee.vn/shp.ee và làm sạch các tham số tracking rác"""
+    target_url = raw_url.strip()
+    
+    if "s.shopee" in target_url.lower() or "shp.ee" in target_url.lower():
+        try:
+            r = requests.head(target_url, allow_redirects=True, timeout=8)
+            target_url = r.url
+        except Exception:
+            try:
+                r = requests.get(target_url, allow_redirects=True, timeout=8)
+                target_url = r.url
+            except Exception:
+                pass
 
-def convert_shopee_cookie(original_url, user_id):
-    if not SHOPEE_COOKIE:
-        return None
+    parsed = urlparse(target_url)
+    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    if clean_url.endswith('/'):
+        clean_url = clean_url[:-1]
         
-    url = "https://affiliate.shopee.vn/api/v3/gql"
-    headers = {
-        "Cookie": SHOPEE_COOKIE,
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://affiliate.shopee.vn/",
-        "Origin": "https://affiliate.shopee.vn",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Dest": "empty"
-    }
-    payload = {
-        "query": """
-        mutation CustomLink($url: String!,$subId: String) {
-            generateCustomLink(input: { originUrl: $url, subId1:$subId }) {
-                shortLink
-            }
-        }
-        """,
-        "variables": {"url": original_url, "subId": str(user_id)}
-    }
-    try:
-        res = requests.post(url, json=payload, headers=headers, timeout=10)
-        data = res.json()
-        if "data" in data and data["data"] and data["data"].get("generateCustomLink"):
-            return data["data"]["generateCustomLink"]["shortLink"]
-    except Exception:
-        pass
-    return None
+    return clean_url
 
-def convert_shopee_link(original_url, user_id):
-    afflink = convert_shopee_addlivetag(original_url, user_id)
-    if afflink:
-        return afflink
-    return convert_shopee_cookie(original_url, user_id)
+def convert_shopee_link(original_url: str, user_id: str) -> str:
+    """Khởi tạo link Affiliate Shopee chuẩn cơ chế an_redir 2026"""
+    try:
+        if not SHOPEE_AFFILIATE_ID:
+            print("❌ Thiếu SHOPEE_AFFILIATE_ID!")
+            return None
+
+        clean_landing_page = clean_shopee_url(original_url)
+        encoded_landing = quote(clean_landing_page, safe='')
+        
+        affiliate_link = (
+            f"https://s.shopee.vn/an_redir"
+            f"?origin_link={encoded_landing}"
+            f"&affiliate_id={SHOPEE_AFFILIATE_ID}"
+            f"&sub_id={user_id}"
+        )
+        return affiliate_link
+    except Exception as e:
+        print(f"❌ Lỗi tạo link Shopee an_redir: {e}")
+        return None
 
 # ==========================================
 # 4. BOT TELEGRAM HANDLERS & LỆNH
@@ -269,7 +251,6 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    # Xem lịch sử đơn hàng (Tách biệt Shopee & TikTok)
     @bot.message_handler(func=lambda msg: msg.text in ["📦 Đơn hàng của tôi", "/danhsach", "/donhang"])
     def my_orders(message):
         user = get_user(message.from_user.id)
@@ -277,22 +258,16 @@ if bot:
         orders_t = user.get("orders_tiktok", []) if user else []
         
         text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
-        
         text += "🛍️ **Shopee:**\n"
-        if not orders_s:
-            text += "• Chưa có đơn Shopee nào.\n"
-        else:
-            text += "".join([f"• {i}\n" for i in orders_s[-5:]])
+        if not orders_s: text += "• Chưa có đơn Shopee nào.\n"
+        else: text += "".join([f"• {i}\n" for i in orders_s[-5:]])
             
         text += "\n🎵 **TikTok Shop:**\n"
-        if not orders_t:
-            text += "• Chưa có đơn TikTok nào.\n"
-        else:
-            text += "".join([f"• {i}\n" for i in orders_t[-5:]])
+        if not orders_t: text += "• Chưa có đơn TikTok nào.\n"
+        else: text += "".join([f"• {i}\n" for i in orders_t[-5:]])
             
         bot.reply_to(message, text, parse_mode="Markdown")
 
-    # Xem số dư ví (Tách biệt Shopee & TikTok)
     @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet"])
     def my_balance(message):
         user = get_user(message.from_user.id)
@@ -317,7 +292,6 @@ if bot:
     def support(message):
         bot.reply_to(message, "💬 Gửi nội dung cần hỗ trợ kèm mã đơn vào đây nhé!")
 
-    # Lệnh Admin thanh toán: /pay <telegram_id> hoặc /thanhtoan <telegram_id>
     @bot.message_handler(commands=['pay', 'thanhtoan'])
     def admin_pay(message):
         if str(message.from_user.id) != str(ADMIN_ID):
@@ -343,19 +317,14 @@ if bot:
             bot.reply_to(message, f"⚠️ User `{target_id}` không có số dư để thanh toán!", parse_mode="Markdown")
             return
 
-        # Reset số dư cả 2 sàn về 0
         save_or_update_user(target_id, balance_shopee=0, balance_tiktok=0)
+        bot.reply_to(message, f"✅ Đã thanh toán thành công cho User `{target_id}`!\n💵 Đã chuyển khoản và đưa số dư về **0 VNĐ**.", parse_mode="Markdown")
         
-        bot.reply_to(message, f"✅ Đã thanh toán thành công cho User `{target_id}`!\n💵 Đã chuyển khoản và đưa số dư Shopee & TikTok về **0 VNĐ**.", parse_mode="Markdown")
-        
-        # Gửi thông báo về cho người dùng
         try:
             bot.send_message(
                 target_id, 
                 f"🎉 **THÔNG BÁO THANH TOÁN THÀNH CÔNG!**\n\n"
-                f"Admin đã thanh toán số dư tích lũy (Shopee: {bal_s:,.0f}đ | TikTok: {bal_t:,.0f}đ) vào tài khoản ngân hàng của bạn.\n"
-                f"💳 Số dư ví hiện tại của bạn đã được reset về: **0 VNĐ**.\n\n"
-                f"Cảm ơn bạn đã sử dụng dịch vụ!", 
+                f"Admin đã thanh toán số dư tích lũy vào tài khoản của bạn.\n💳 Số dư ví hiện tại: **0 VNĐ**.", 
                 parse_mode="Markdown"
             )
         except Exception:
@@ -432,36 +401,32 @@ def webhook():
                             bal_t = max(0, bal_t - cashback)
                             orders_t.append(f"❌ Hủy đơn TikTok #{order_id}: -{cashback:,.0f} VNĐ")
                             save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                            try:
-                                bot.send_message(target_id, f"❌ ĐƠN TIKTOK BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            try: bot.send_message(target_id, f"❌ ĐƠN TIKTOK BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
                             except Exception: pass
                         else:
                             bal_t += cashback
                             orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
                             save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                            try:
-                                bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            try: bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
                             except Exception: pass
                     else:
                         if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
                             bal_s = max(0, bal_s - cashback)
                             orders_s.append(f"❌ Hủy đơn Shopee #{order_id}: -{cashback:,.0f} VNĐ")
                             save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                            try:
-                                bot.send_message(target_id, f"❌ ĐƠN SHOPEE BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            try: bot.send_message(target_id, f"❌ ĐƠN SHOPEE BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
                             except Exception: pass
                         else:
                             bal_s += cashback
                             orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
                             save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                            try:
-                                bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            try: bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
                             except Exception: pass
                 return "OK", 200
         except Exception as e:
             print("Lỗi xử lý Postback JSON:", e)
 
-        # Xử lý Query Parameters (GET)
+    # Xử lý Query Parameters (GET)
     target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
     comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('est_commission')
     if target_id and comm_str and bot:
@@ -470,8 +435,8 @@ def webhook():
             cashback = int(total_comm * CASHBACK_RATE)
             order_id = request.args.get('order_id') or 'Mới'
             source = str(request.args.get('source') or "").lower()
-            is_tiktok = "tiktok" in source
-
+            is_tiktok = "tiktok" in source or "tiktok" in request.url
+            
             user = get_user(target_id)
             bal_s = user.get("balance_shopee", 0) if user else 0
             bal_t = user.get("balance_tiktok", 0) if user else 0
@@ -482,36 +447,23 @@ def webhook():
                 bal_t += cashback
                 orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
                 save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                try:
+                try: 
                     bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                except Exception: pass
+                except Exception: 
+                    pass
             else:
                 bal_s += cashback
                 orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
                 save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                try:
+                try: 
                     bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                except Exception: pass
-        except Exception: pass
-
-    return "Server Cashback đang hoạt động mượt mà!", 200
-
-# Run Bot trên luồng riêng
-def run_bot():
-    if not bot: return
-    try: bot.remove_webhook()
-    except Exception: pass
-    while True:
-        try:
-            print("🤖 Đang lắng nghe tin nhắn từ Telegram...")
-            bot.infinity_polling(skip_pending=True, timeout=20)
+                except Exception: 
+                    pass
         except Exception as e:
-            print(f"❌ Lỗi Polling: {e}")
-            time.sleep(5)
+            print("Lỗi xử lý Postback GET:", e)
+            
+    return "OK", 200
 
-threading.Thread(target=run_bot, daemon=True).start()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
     
