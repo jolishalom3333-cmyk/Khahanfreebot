@@ -24,7 +24,7 @@ CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
 # Creator username kết nối trên RioHub
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
-# Danh sách Base URL chính thức của RioHub theo tài liệu API[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
+# Danh sách Base URL chính thức của RioHub[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
 RIOHUB_BASE_URLS = [
     "https://riohub.vn/api/v1",
     "https://riohub.riokupon.com/api/v1",
@@ -105,7 +105,7 @@ def validate_sub_id(sub_id: str) -> bool:
     return True
 
 def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
-    """ Tạo link TikTok qua API RioHub sử dụng endpoint chuẩn /partner/tiktok/affiliate/links[span_6](start_span)[span_6](end_span) """
+    """ Tạo link TikTok qua API RioHub có tự động mở rộng link rút gọn vt.tiktok.com[span_4](start_span)[span_4](end_span) """
     sub_id_str = str(sub_id)
     if not validate_sub_id(sub_id_str):
         print(f"❌ Lỗi sub_id không hợp lệ: {sub_id_str}")
@@ -114,6 +114,16 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
     if not RIOHUB_API_KEY:
         print("❌ Chưa cấu hình RIOHUB_API_KEY!")
         return None, "Hệ thống chưa cài đặt RIOHUB_API_KEY!"
+
+    # Tự động mở rộng link rút gọn vt.tiktok.com
+    target_url = product_url_or_id
+    if str(target_url).startswith("http"):
+        try:
+            r_head = requests.head(target_url, allow_redirects=True, timeout=5)
+            target_url = r_head.url
+            print(f"🔗 Link đã mở rộng: {target_url}")
+        except Exception as e:
+            print(f"⚠️ Không thể mở rộng link rút gọn: {e}")
 
     endpoints = [
         "/partner/tiktok/affiliate/links",
@@ -125,10 +135,10 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
         "sub_id": sub_id_str
     }
     
-    if str(product_url_or_id).startswith("http"):
-        payload["product_url"] = product_url_or_id
+    if str(target_url).startswith("http"):
+        payload["product_url"] = target_url
     else:
-        payload["product_id"] = str(product_url_or_id)
+        payload["product_id"] = str(target_url)
 
     headers = {
         "X-Riohub-Api-Key": RIOHUB_API_KEY,
@@ -141,24 +151,18 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
             for attempt in range(2):
                 try:
                     res = requests.post(url, json=payload, headers=headers, timeout=10)
-                    print(f"🔎 [RioHub {endpoint}] Status Code: {res.status_code}")
+                    print(f"🔎 [RioHub {endpoint}] Status Code: {res.status_code} - Response: {res.text[:150]}")
                     
                     if res.status_code == 429:
                         retry_after = int(res.headers.get("Retry-After", 2))
-                        print(f"⚠️ RioHub 429 Rate Limited, chờ {retry_after}s...")
                         time.sleep(retry_after)
                         continue
 
                     if res.status_code == 422:
                         err_data = res.json()
-                        err_code = err_data.get("error", {}).get("code", "")
-                        if err_code == "product_not_promotable" or "product_not_promotable" in res.text:
-                            return None, "Sản phẩm này hiện không có hoa hồng, chưa được shop duyệt hoặc bị TikTok hạn chế!"
-                        return None, f"Lỗi 422: {err_data.get('message', 'Tham số không hợp lệ')}"
+                        return None, f"Lỗi 422: {err_data.get('message', 'Sản phẩm không hỗ trợ tạo link')}"
 
                     if res.status_code in [401, 403, 404]:
-                        print(f"❌ RioHub lỗi {res.status_code} tại {endpoint} - Response: {res.text}")
-                        # Thử endpoint tiếp theo nếu lỗi 404
                         if res.status_code == 404:
                             break
                         return None, f"Lỗi xác thực RioHub ({res.status_code})"
@@ -170,7 +174,6 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
                             return aff_link, None
 
                 except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                    print(f"⚠️ Kết nối tới {url} thất bại...")
                     break
                 except Exception as e:
                     print("❌ Lỗi gọi RioHub API:", e)
@@ -279,7 +282,6 @@ if bot:
             platform = "TikTok Shop"
             afflink, err_msg = convert_tiktok_riohub(raw_url, uid)
             if not afflink:
-                # Sử dụng text thuần túy để tránh lỗi 400 Bad Request từ Markdown
                 bot.reply_to(message, f"❌ Lỗi TikTok: {err_msg or 'Không thể tạo link qua RioHub.'}")
                 return
 
@@ -371,10 +373,9 @@ def run_bot():
             print(f"❌ Lỗi Polling: {e}")
             time.sleep(5)
 
-threading.Thread(target=run_bot, daemon=True).sub_id = None
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-        
+    
