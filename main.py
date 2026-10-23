@@ -21,7 +21,7 @@ SHOPEE_COOKIE = os.environ.get('SHOPEE_COOKIE', '').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
 
-# Creator username kết nối trên RioHub (đã cập nhật đọc mặc định từ biến môi trường)
+# Creator username kết nối trên RioHub
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
 # Danh sách Base URL dự phòng của RioHub
@@ -105,7 +105,7 @@ def validate_sub_id(sub_id: str) -> bool:
     return True
 
 def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
-    """ Tạo link TikTok qua API RioHub chuẩn Spec 09/10/2026 """
+    """ Tạo link TikTok qua API RioHub có kèm debug lỗi chi tiết """
     sub_id_str = str(sub_id)
     if not validate_sub_id(sub_id_str):
         print(f"❌ Lỗi sub_id không hợp lệ: {sub_id_str}")
@@ -131,7 +131,6 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
         "Content-Type": "application/json"
     }
 
-    # Vòng lặp chuyển Base URL nếu lỗi kết nối/DNS/timeout
     for base_url in RIOHUB_BASE_URLS:
         url = base_url + endpoint
         for attempt in range(3):
@@ -152,8 +151,10 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
                         return None, "Sản phẩm này hiện không có hoa hồng, chưa được shop duyệt hoặc bị TikTok hạn chế!"
                     return None, f"Lỗi 422: {err_data.get('message', 'Tham số không hợp lệ')}"
 
+                # In chi tiết nguyên văn lỗi từ RioHub ra Logs để debug
                 if res.status_code in [401, 403, 404]:
-                    return None, f"Lỗi xác thực RioHub ({res.status_code})! Vui lòng báo Admin kiểm tra API Key."
+                    print(f"❌ RioHub lỗi {res.status_code} - Response: {res.text}")
+                    return None, f"Lỗi xác thực RioHub ({res.status_code}): {res.text[:80]}"
 
                 if res.status_code == 200:
                     data = res.json()
@@ -370,4 +371,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
+            
