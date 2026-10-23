@@ -21,10 +21,10 @@ SHOPEE_COOKIE = os.environ.get('SHOPEE_COOKIE', '').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
 
-# Creator username kết nối trên RioHub (có thể đổi qua biến môi trường)
-CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'pheejzoo1564').strip()
+# Creator username kết nối trên RioHub (đã cập nhật đọc mặc định từ biến môi trường)
+CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
-# Danh sách Base URL dự phòng của RioHub theo Spec 09/10/2026
+# Danh sách Base URL dự phòng của RioHub
 RIOHUB_BASE_URLS = [
     "https://riohub.vn/api/v1",
     "https://riohub.riokupon.com/api/v1",
@@ -94,7 +94,7 @@ def log_click(user_id, raw_url):
 # ==========================================
 
 def validate_sub_id(sub_id: str) -> bool:
-    """ Kiểm tra quy tắc sub_id theo Spec RioHub: 1-128 ký tự [A-Za-z0-9_-], tối đa 4 sub phân tách bằng '-' """
+    """ Kiểm tra quy tắc sub_id theo Spec RioHub """
     if not sub_id or not (1 <= len(sub_id) <= 128):
         return False
     if not re.match(r'^[A-Za-z0-9_.-]+$', sub_id):
@@ -139,14 +139,12 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
                 res = requests.post(url, json=payload, headers=headers, timeout=10)
                 print(f"🔎 [RioHub Status Code]: {res.status_code}")
                 
-                # Bị giới hạn tần suất 429 -> Tự chờ Retry-After rồi thử lại
                 if res.status_code == 429:
                     retry_after = int(res.headers.get("Retry-After", 2))
                     print(f"⚠️ RioHub 429 Rate Limited, chờ {retry_after}s...")
                     time.sleep(retry_after)
                     continue
 
-                # Lỗi nghiệp vụ 422
                 if res.status_code == 422:
                     err_data = res.json()
                     err_code = err_data.get("error", {}).get("code", "")
@@ -165,7 +163,7 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
 
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                 print(f"⚠️ Kết nối tới {base_url} thất bại, đang thử server dự phòng tiếp theo...")
-                break # Chuyển sang base_url kế tiếp trong danh sách
+                break
             except Exception as e:
                 print("❌ Lỗi gọi RioHub API:", e)
                 return None, "Đã có lỗi xảy ra khi kết nối tới RioHub!"
@@ -173,7 +171,7 @@ def convert_tiktok_riohub(product_url_or_id: str, sub_id: str):
     return None, "Không thể kết nối tới máy chủ RioHub!"
 
 def convert_shopee_cookie(original_url, user_id):
-    """ Tạo link Shopee bằng Cookie GraphQL với headers giả lập đầy đủ """
+    """ Tạo link Shopee bằng Cookie GraphQL """
     if not SHOPEE_COOKIE:
         print("❌ Chưa cấu hình SHOPEE_COOKIE!")
         return None
@@ -305,7 +303,6 @@ def webhook():
         try:
             data = request.get_json(silent=True) or {}
             if data:
-                # Đọc dữ liệu POSTBACK theo chuẩn RioHub & Shopee
                 target_id = str(data.get("sub_id") or data.get("trace_id") or data.get("subid") or "").strip()
                 comm = float(data.get("commission") or data.get("pub_commission") or data.get("est_commission") or 0)
                 order_id = str(data.get("order_id") or data.get("id") or "Mới")
@@ -317,7 +314,6 @@ def webhook():
                     old_bal = user.get("balance", 0) if user else 0
                     old_orders = user.get("orders", []) if user else []
 
-                    # Xử lý khi đơn bị hủy/hoàn tiền
                     if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
                         new_bal = max(0, old_bal - cashback)
                         old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
@@ -336,7 +332,6 @@ def webhook():
         except Exception as e:
             print("Lỗi xử lý Postback:", e)
 
-    # Hỗ trợ nhận GET Postback
     target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
     comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('est_commission')
     if target_id and comm_str and bot:
@@ -364,8 +359,10 @@ def run_bot():
     except Exception: pass
     while True:
         try:
+            print("🤖 Đang lắng nghe tin nhắn từ Telegram...")
             bot.infinity_polling(skip_pending=True, timeout=20)
-        except Exception:
+        except Exception as e:
+            print(f"❌ Lỗi Polling: {e}")
             time.sleep(5)
 
 threading.Thread(target=run_bot, daemon=True).start()
@@ -373,4 +370,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                
+    
