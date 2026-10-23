@@ -464,6 +464,19 @@ def webhook():
             
     return "OK", 200
 
+def run_bot():
+    if bot:
+        print("🤖 Telegram Bot polling started...")
+        while True:
+            try:
+                bot.infinity_polling(timeout=60, long_polling_timeout=60)
+            except Exception as e:
+                print(f"❌ Lỗi Polling Bot: {e}")
+                time.sleep(5)
+
 if __name__ == '__main__':
+    if bot:
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
+        
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    
