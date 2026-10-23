@@ -8,6 +8,7 @@ from urllib.parse import quote
 from flask import Flask, request
 import requests
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================================
 # 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & KHỞI TẠO
@@ -19,7 +20,10 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
 SHOPEE_COOKIE = os.environ.get('SHOPEE_COOKIE', '').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
-CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 90)) / 100.0
+ADDLIVETAG_API_KEY = os.environ.get('ADDLIVETAG_API_KEY', '').strip()
+
+# Tỷ lệ Cashback mặc định 70% cho khách (giữ lại 30% phí vận hành)
+CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 70)) / 100.0
 
 # Creator username kết nối trên RioHub
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
@@ -54,7 +58,7 @@ def get_user(user_id):
     except Exception:
         return None
 
-def save_or_update_user(user_id, name=None, username=None, balance=None, orders=None):
+def save_or_update_user(user_id, name=None, username=None, balance_shopee=None, balance_tiktok=None, orders_shopee=None, orders_tiktok=None):
     if not supabase: return
     try:
         uid = str(user_id)
@@ -63,8 +67,10 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
             data = {}
             if name is not None: data["name"] = name
             if username is not None: data["username"] = username
-            if balance is not None: data["balance"] = balance
-            if orders is not None: data["orders"] = orders
+            if balance_shopee is not None: data["balance_shopee"] = balance_shopee
+            if balance_tiktok is not None: data["balance_tiktok"] = balance_tiktok
+            if orders_shopee is not None: data["orders_shopee"] = orders_shopee
+            if orders_tiktok is not None: data["orders_tiktok"] = orders_tiktok
             if data:
                 supabase.table('users').update(data).eq('id', uid).execute()
         else:
@@ -72,11 +78,13 @@ def save_or_update_user(user_id, name=None, username=None, balance=None, orders=
                 "id": uid,
                 "name": name or "Khách hàng",
                 "username": username or "",
-                "balance": balance if balance is not None else 0,
-                "orders": orders if orders is not None else []
+                "balance_shopee": balance_shopee if balance_shopee is not None else 0,
+                "balance_tiktok": balance_tiktok if balance_tiktok is not None else 0,
+                "orders_shopee": orders_shopee if orders_shopee is not None else [],
+                "orders_tiktok": orders_tiktok if orders_tiktok is not None else []
             }).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Lỗi lưu user Supabase: {e}")
 
 def log_click(user_id, raw_url):
     if not supabase: return
@@ -94,11 +102,6 @@ def log_click(user_id, raw_url):
 # ==========================================
 
 def validate_sub_id(sub_id: str) -> bool:
-    """
-    Kiểm tra quy tắc sub_id phía client theo Spec RioHub:
-    - 1–128 ký tự [A-Za-z0-9_-]
-    - Tối đa 4 dấu phân tách '-' (chia tối đa thành các phần, giá trị mỗi phần không chứa '-')
-    """
     if not sub_id or not (1 <= len(sub_id) <= 128):
         return False
     if not re.match(r'^[A-Za-z0-9_.-]+$', sub_id):
@@ -109,31 +112,20 @@ def validate_sub_id(sub_id: str) -> bool:
     return True
 
 def createAffiliateLink(product_url_or_id: str, sub_id: str):
-    """
-    Tạo link TikTok qua API RioHub chuẩn Spec:
-    - Tự động mở rộng link rút gọn vt.tiktok.com
-    - Kiểm tra sub_id chặt chẽ
-    - Xoay vòng Base URL khi lỗi mạng/timeout (không đổi domain khi gặp 4xx/5xx)
-    - Xử lý 429 Rate Limit dựa trên Retry-After
-    """
     sub_id_str = str(sub_id).strip()
     if not validate_sub_id(sub_id_str):
-        print(f"❌ Lỗi sub_id không hợp lệ: {sub_id_str}")
-        return None, "Lỗi: sub_id không đúng quy chuẩn (1-128 ký tự, tối đa 4 dấu '-')"
+        return None, "Lỗi: sub_id không đúng quy chuẩn (1-128 ký tự)"
 
     if not RIOHUB_API_KEY:
-        print("❌ Chưa cấu hình RIOHUB_API_KEY!")
         return None, "Hệ thống chưa cài đặt RIOHUB_API_KEY!"
 
-    # Tự động mở rộng link rút gọn vt.tiktok.com
     target_url = product_url_or_id
     if str(target_url).startswith("http"):
         try:
             r_head = requests.head(target_url, allow_redirects=True, timeout=5)
             target_url = r_head.url
-            print(f"🔗 Link đã mở rộng: {target_url}")
-        except Exception as e:
-            print(f"⚠️ Không thể mở rộng link rút gọn: {e}")
+        except Exception:
+            pass
 
     endpoint = "/partner/tiktok/affiliate/links"
     payload = {
@@ -151,17 +143,13 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
         "Content-Type": "application/json"
     }
 
-    # Vòng lặp Base URL: chỉ chuyển domain khi lỗi kết nối / timeout / DNS
     for base_url in RIOHUB_BASE_URLS:
         url = base_url + endpoint
         for attempt in range(3):
             try:
                 res = requests.post(url, json=payload, headers=headers, timeout=10)
-                print(f"🔎 [RioHub Status Code]: {res.status_code} tại {base_url}")
-                
                 if res.status_code == 429:
                     retry_after = int(res.headers.get("Retry-After", 2))
-                    print(f"⚠️ RioHub 429 Rate Limited, chờ {retry_after}s...")
                     time.sleep(retry_after)
                     continue
 
@@ -172,13 +160,12 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
                         msg = err_data.get("message", "Tham số không hợp lệ")
                     except:
                         err_code, msg = "", res.text
-                        
                     if err_code == "product_not_promotable" or "product_not_promotable" in res.text:
-                        return None, "Sản phẩm này hiện không có hoa hồng, chưa được shop duyệt hoặc bị TikTok hạn chế!"
+                        return None, "Sản phẩm này hiện không có hoa hồng hoặc bị TikTok hạn chế!"
                     return None, f"Lỗi 422: {msg}"
 
                 if res.status_code in [401, 403, 404]:
-                    return None, f"Lỗi xác thực RioHub ({res.status_code}): Kiểm tra lại API Key hoặc Creator Username."
+                    return None, f"Lỗi xác thực RioHub ({res.status_code})."
 
                 if res.status_code >= 500:
                     return None, f"Lỗi máy chủ RioHub ({res.status_code})."
@@ -188,28 +175,45 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
                     aff_link = data.get("affiliate_link")
                     if aff_link:
                         return aff_link, None
-                    return None, "API trả về thành công nhưng thiếu trường affiliate_link."
+                    return None, "API trả về thành công nhưng thiếu link."
 
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.SSLError):
-                print(f"⚠️ Mất kết nối tới {base_url}, đang thử server dự phòng tiếp theo...")
                 break 
-            except Exception as e:
-                print(f"❌ Lỗi ngoại lệ khi gọi RioHub API: {e}")
-                return None, "Đã có lỗi xảy ra khi kết nối tới hệ thống RioHub!"
+            except Exception:
+                return None, "Đã có lỗi xảy ra khi kết nối tới RioHub!"
 
-    return None, "Không thể kết nối tới máy chủ RioHub (Lỗi mạng/DNS)!"
+    return None, "Không thể kết nối tới máy chủ RioHub!"
+
+def convert_shopee_addlivetag(original_url, user_id):
+    if not ADDLIVETAG_API_KEY:
+        return None
+    url = "https://addlivetag.com/api/v1/shopee/generate-link"
+    headers = {
+        "X-API-Key": ADDLIVETAG_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": original_url,
+        "sub_id": str(user_id)
+    }
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=8)
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("short_link") or data.get("affiliate_link")
+    except Exception:
+        pass
+    return None
 
 def convert_shopee_cookie(original_url, user_id):
-    """ Tạo link Shopee bằng Cookie GraphQL """
     if not SHOPEE_COOKIE:
-        print("❌ Chưa cấu hình SHOPEE_COOKIE!")
         return None
         
     url = "https://affiliate.shopee.vn/api/v3/gql"
     headers = {
         "Cookie": SHOPEE_COOKIE,
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": "https://affiliate.shopee.vn/",
         "Origin": "https://affiliate.shopee.vn",
         "Sec-Fetch-Site": "same-origin",
@@ -228,16 +232,18 @@ def convert_shopee_cookie(original_url, user_id):
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"🔎 [Shopee API Status]: {res.status_code}")
-        
         data = res.json()
         if "data" in data and data["data"] and data["data"].get("generateCustomLink"):
             return data["data"]["generateCustomLink"]["shortLink"]
-        else:
-            print(f"⚠️ Shopee trả về lỗi dữ liệu: {data}")
-    except Exception as e:
-        print("❌ Lỗi Shopee Cookie:", e)
+    except Exception:
+        pass
     return None
+
+def convert_shopee_link(original_url, user_id):
+    afflink = convert_shopee_addlivetag(original_url, user_id)
+    if afflink:
+        return afflink
+    return convert_shopee_cookie(original_url, user_id)
 
 # ==========================================
 # 4. BOT TELEGRAM HANDLERS & LỆNH
@@ -259,24 +265,49 @@ if bot:
             f"🛒 Cách nhận hoàn tiền {int(CASHBACK_RATE * 100)}%:\n"
             f"1️⃣ Copy link sản phẩm trên Shopee / TikTok Shop.\n"
             f"2️⃣ Gửi link trực tiếp vào đây cho Bot.\n"
-            f"3️⃣ Bấm link rút gọn Bot trả về để mua hàng."
+            f"3️⃣ Bấm nút mua hàng để được ghi nhận hoàn tiền tự động."
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    @bot.message_handler(func=lambda msg: msg.text == "📦 Đơn hàng của tôi")
+    # Xem lịch sử đơn hàng (Tách biệt Shopee & TikTok)
+    @bot.message_handler(func=lambda msg: msg.text in ["📦 Đơn hàng của tôi", "/danhsach", "/donhang"])
     def my_orders(message):
         user = get_user(message.from_user.id)
-        orders = user.get("orders", []) if user else []
-        if not orders:
-            bot.reply_to(message, "📦 Bạn chưa có đơn hàng nào được ghi nhận.")
+        orders_s = user.get("orders_shopee", []) if user else []
+        orders_t = user.get("orders_tiktok", []) if user else []
+        
+        text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
+        
+        text += "🛍️ **Shopee:**\n"
+        if not orders_s:
+            text += "• Chưa có đơn Shopee nào.\n"
         else:
-            bot.reply_to(message, "📦 LỊCH SỬ ĐƠN HÀNG:\n\n" + "\n".join([f"• {i}" for i in orders[-10:]]))
+            text += "".join([f"• {i}\n" for i in orders_s[-5:]])
+            
+        text += "\n🎵 **TikTok Shop:**\n"
+        if not orders_t:
+            text += "• Chưa có đơn TikTok nào.\n"
+        else:
+            text += "".join([f"• {i}\n" for i in orders_t[-5:]])
+            
+        bot.reply_to(message, text, parse_mode="Markdown")
 
-    @bot.message_handler(func=lambda msg: msg.text == "💳 Ví & Số dư")
+    # Xem số dư ví (Tách biệt Shopee & TikTok)
+    @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet"])
     def my_balance(message):
         user = get_user(message.from_user.id)
-        bal = user.get("balance", 0) if user else 0
-        bot.reply_to(message, f"💳 SỐ DƯ VÍ TÍCH LŨY: {bal:,.0f} VNĐ")
+        bal_s = user.get("balance_shopee", 0) if user else 0
+        bal_t = user.get("balance_tiktok", 0) if user else 0
+        total = bal_s + bal_t
+        
+        text = (
+            f"💳 **SỐ DƯ VÍ TÍCH LŨY CỦA BẠN:**\n\n"
+            f"🛍️ Số dư Shopee: **{bal_s:,.0f} VNĐ**\n"
+            f"🎵 Số dư TikTok: **{bal_t:,.0f} VNĐ**\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 **Tổng số dư:** `{total:,.0f} VNĐ`"
+        )
+        bot.reply_to(message, text, parse_mode="Markdown")
 
     @bot.message_handler(func=lambda msg: msg.text in ["❓ Hướng dẫn mua hàng", "/huongdan"])
     def guide(message):
@@ -285,6 +316,50 @@ if bot:
     @bot.message_handler(func=lambda msg: msg.text == "💬 Hỗ trợ Admin")
     def support(message):
         bot.reply_to(message, "💬 Gửi nội dung cần hỗ trợ kèm mã đơn vào đây nhé!")
+
+    # Lệnh Admin thanh toán: /pay <telegram_id> hoặc /thanhtoan <telegram_id>
+    @bot.message_handler(commands=['pay', 'thanhtoan'])
+    def admin_pay(message):
+        if str(message.from_user.id) != str(ADMIN_ID):
+            bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
+            return
+            
+        parts = message.text.strip().split()
+        if len(parts) < 2:
+            bot.reply_to(message, "⚠️ Cú pháp sai! Dùng: `/pay <telegram_id>`", parse_mode="Markdown")
+            return
+            
+        target_id = parts[1].strip()
+        user = get_user(target_id)
+        if not user:
+            bot.reply_to(message, f"❌ Không tìm thấy user có ID: `{target_id}` trong hệ thống!", parse_mode="Markdown")
+            return
+            
+        bal_s = user.get("balance_shopee", 0)
+        bal_t = user.get("balance_tiktok", 0)
+        total_pay = bal_s + bal_t
+        
+        if total_pay <= 0:
+            bot.reply_to(message, f"⚠️ User `{target_id}` không có số dư để thanh toán!", parse_mode="Markdown")
+            return
+
+        # Reset số dư cả 2 sàn về 0
+        save_or_update_user(target_id, balance_shopee=0, balance_tiktok=0)
+        
+        bot.reply_to(message, f"✅ Đã thanh toán thành công cho User `{target_id}`!\n💵 Đã chuyển khoản và đưa số dư Shopee & TikTok về **0 VNĐ**.", parse_mode="Markdown")
+        
+        # Gửi thông báo về cho người dùng
+        try:
+            bot.send_message(
+                target_id, 
+                f"🎉 **THÔNG BÁO THANH TOÁN THÀNH CÔNG!**\n\n"
+                f"Admin đã thanh toán số dư tích lũy (Shopee: {bal_s:,.0f}đ | TikTok: {bal_t:,.0f}đ) vào tài khoản ngân hàng của bạn.\n"
+                f"💳 Số dư ví hiện tại của bạn đã được reset về: **0 VNĐ**.\n\n"
+                f"Cảm ơn bạn đã sử dụng dịch vụ!", 
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
     @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
     def convert_link(message):
@@ -295,7 +370,6 @@ if bot:
         afflink = None
         platform = ""
         
-        # 1. Link TikTok Shop
         if "tiktok" in raw_url.lower():
             platform = "TikTok Shop"
             afflink, err_msg = createAffiliateLink(raw_url, uid)
@@ -303,21 +377,28 @@ if bot:
                 bot.reply_to(message, f"❌ Lỗi TikTok: {err_msg or 'Không thể tạo link qua RioHub.'}")
                 return
 
-        # 2. Link Shopee
         elif "shopee" in raw_url.lower() or "shp.ee" in raw_url.lower():
             platform = "Shopee"
-            afflink = convert_shopee_cookie(raw_url, uid)
+            afflink = convert_shopee_link(raw_url, uid)
             if not afflink:
-                bot.reply_to(message, "❌ Lỗi Shopee: Cookie hết hạn hoặc không hợp lệ. Vui lòng báo Admin!")
+                bot.reply_to(message, "❌ Lỗi Shopee: Không thể khởi tạo link mua hàng. Vui lòng thử lại sau!")
                 return
         else:
             bot.reply_to(message, "⚠️ Bot hiện chỉ hỗ trợ tạo link mua hàng cho Shopee và TikTok Shop!")
             return
             
-        bot.reply_to(message, f"🛍️ Bấm vào đây để mua hàng hoàn tiền ({platform}):\n{afflink}")
+        inline_kb = InlineKeyboardMarkup()
+        btn_buy = InlineKeyboardButton(text=f"🛒 MUA NGAY HOÀN TIỀN {int(CASHBACK_RATE * 100)}%", url=afflink)
+        inline_kb.add(btn_buy)
+        
+        caption_text = (
+            f"🎉 **Link hoàn tiền ({platform}) đã sẵn sàng!**\n\n"
+            f"💡 Bấm vào nút bên dưới để mở ứng dụng và tiến hành đặt hàng:"
+        )
+        bot.send_message(message.chat.id, caption_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 # ==========================================
-# 5. FLASK WEBHOOK POSTBACK (CỘNG TIỀN ĐƠN HÀNG)
+# 5. FLASK WEBHOOK POSTBACK (CỘNG TIỀN TÁCH BIỆT)
 # ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
@@ -333,31 +414,54 @@ def webhook():
                 comm = float(data.get("commission") or data.get("pub_commission") or data.get("est_commission") or 0)
                 order_id = str(data.get("order_id") or data.get("id") or "Mới")
                 event_type = str(data.get("event") or "").lower()
+                
+                source = str(data.get("source") or "").lower()
+                is_tiktok = "tiktok" in source or "riohub" in request.url or "tiktok" in str(data)
 
                 if target_id and comm > 0 and bot:
                     cashback = int(comm * CASHBACK_RATE)
                     user = get_user(target_id)
-                    old_bal = user.get("balance", 0) if user else 0
-                    old_orders = user.get("orders", []) if user else []
+                    
+                    bal_s = user.get("balance_shopee", 0) if user else 0
+                    bal_t = user.get("balance_tiktok", 0) if user else 0
+                    orders_s = user.get("orders_shopee", []) if user else []
+                    orders_t = user.get("orders_tiktok", []) if user else []
 
-                    if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
-                        new_bal = max(0, old_bal - cashback)
-                        old_orders.append(f"❌ Hủy đơn #{order_id}: -{cashback:,.0f} VNĐ")
-                        save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-                        try:
-                            bot.send_message(target_id, f"❌ ĐƠN HÀNG BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                        except Exception: pass
+                    if is_tiktok:
+                        if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
+                            bal_t = max(0, bal_t - cashback)
+                            orders_t.append(f"❌ Hủy đơn TikTok #{order_id}: -{cashback:,.0f} VNĐ")
+                            save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
+                            try:
+                                bot.send_message(target_id, f"❌ ĐƠN TIKTOK BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            except Exception: pass
+                        else:
+                            bal_t += cashback
+                            orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
+                            save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
+                            try:
+                                bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            except Exception: pass
                     else:
-                        new_bal = old_bal + cashback
-                        old_orders.append(f"🛒 Hoàn tiền #{order_id}: +{cashback:,.0f} VNĐ")
-                        save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-                        try:
-                            bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                        except Exception: pass
+                        if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
+                            bal_s = max(0, bal_s - cashback)
+                            orders_s.append(f"❌ Hủy đơn Shopee #{order_id}: -{cashback:,.0f} VNĐ")
+                            save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
+                            try:
+                                bot.send_message(target_id, f"❌ ĐƠN SHOPEE BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            except Exception: pass
+                        else:
+                            bal_s += cashback
+                            orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
+                            save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
+                            try:
+                                bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                            except Exception: pass
                 return "OK", 200
         except Exception as e:
-            print("Lỗi xử lý Postback:", e)
+            print("Lỗi xử lý Postback JSON:", e)
 
+        # Xử lý Query Parameters (GET)
     target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
     comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('est_commission')
     if target_id and comm_str and bot:
@@ -365,15 +469,29 @@ def webhook():
             total_comm = float(comm_str)
             cashback = int(total_comm * CASHBACK_RATE)
             order_id = request.args.get('order_id') or 'Mới'
+            source = str(request.args.get('source') or "").lower()
+            is_tiktok = "tiktok" in source
+
             user = get_user(target_id)
-            old_bal = user.get("balance", 0) if user else 0
-            old_orders = user.get("orders", []) if user else []
-            new_bal = old_bal + cashback
-            old_orders.append(f"🛒 Hoàn tiền đơn #{order_id}: +{cashback:,.0f} VNĐ")
-            save_or_update_user(target_id, balance=new_bal, orders=old_orders)
-            try:
-                bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-            except Exception: pass
+            bal_s = user.get("balance_shopee", 0) if user else 0
+            bal_t = user.get("balance_tiktok", 0) if user else 0
+            orders_s = user.get("orders_shopee", []) if user else []
+            orders_t = user.get("orders_tiktok", []) if user else []
+
+            if is_tiktok:
+                bal_t += cashback
+                orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
+                save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
+                try:
+                    bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                except Exception: pass
+            else:
+                bal_s += cashback
+                orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
+                save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
+                try:
+                    bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
+                except Exception: pass
         except Exception: pass
 
     return "Server Cashback đang hoạt động mượt mà!", 200
@@ -396,4 +514,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-            
+    
