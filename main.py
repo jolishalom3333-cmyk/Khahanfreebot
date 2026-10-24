@@ -426,96 +426,94 @@ if bot:
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
-    if request.method == 'HEAD': 
+    if request.method == 'HEAD':
         return "", 200
+        
+    # Hỗ trợ lấy dữ liệu từ cả GET (request.args) và POST (json/form)
+    try:
+        if request.method == 'GET':
+            data = request.args.to_dict()
+        else:
+            data = request.get_json(silent=True) or request.form.to_dict()
+    except Exception:
+        data = {}
 
-    if request.is_json or request.method == 'POST':
-        try:
-            data = request.get_json(silent=True) or {}
-            if data:
-                target_id = str(data.get("sub_id") or data.get("trace_id") or data.get("subid") or "").strip()
-                comm = float(data.get("commission") or data.get("pub_commission") or data.get("est_commission") or 0)
-                order_id = str(data.get("order_id") or data.get("id") or "Mới")
-                event_type = str(data.get("event") or "").lower()
-                
-                source = str(data.get("source") or "").lower()
-                is_tiktok = "tiktok" in source or "riohub" in request.url or "tiktok" in str(data)
+    if not data:
+        return "No data", 400
 
-                if target_id and comm > 0 and bot:
-                    cashback = int(comm * CASHBACK_RATE)
-                    user = get_user(target_id)
-                    
-                    bal_s = user.get("balance_shopee", 0) if user else 0
-                    bal_t = user.get("balance_tiktok", 0) if user else 0
-                    orders_s = user.get("orders_shopee", []) if user else []
-                    orders_t = user.get("orders_tiktok", []) if user else []
+    # Lấy thông tin từ thông báo Postback
+    user_id = str(data.get("sub_id") or data.get("uid") or data.get("target_id") or "")
+    order_id = str(data.get("order_id") or data.get("id") or "")
+    try:
+        commission = float(data.get("commission") or data.get("amount") or 0)
+    except:
+        commission = 0
+        
+    status = str(data.get("status") or "PENDING").upper()
+    network = str(data.get("network") or data.get("platform") or "shopee").lower()
 
-                    if is_tiktok:
-                        if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
-                            bal_t = max(0, bal_t - cashback)
-                            orders_t.append(f"❌ Hủy đơn TikTok #{order_id}: -{cashback:,.0f} VNĐ")
-                            save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                            try: bot.send_message(target_id, f"❌ ĐƠN TIKTOK BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                            except Exception: pass
-                        else:
-                            bal_t += cashback
-                            orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
-                            save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                            try: bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                            except Exception: pass
-                    else:
-                        if event_type in ["order.refunded", "cancelled", "rejected"] or data.get("status") == 3:
-                            bal_s = max(0, bal_s - cashback)
-                            orders_s.append(f"❌ Hủy đơn Shopee #{order_id}: -{cashback:,.0f} VNĐ")
-                            save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                            try: bot.send_message(target_id, f"❌ ĐƠN SHOPEE BỊ HỦY/HOÀN!\nTrừ -{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                            except Exception: pass
-                        else:
-                            bal_s += cashback
-                            orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
-                            save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                            try: bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                            except Exception: pass
-                return "OK", 200
-        except Exception as e:
-            print("Lỗi xử lý Postback JSON:", e)
+    if not user_id:
+        return "Missing user_id", 400
 
-    # Xử lý Query Parameters (GET)
-    target_id = request.args.get('sub_id') or request.args.get('utm_source') or request.args.get('subid')
-    comm_str = request.args.get('pub_commission') or request.args.get('commission') or request.args.get('est_commission')
-    if target_id and comm_str and bot:
-        try:
-            total_comm = float(comm_str)
-            cashback = int(total_comm * CASHBACK_RATE)
-            order_id = request.args.get('order_id') or 'Mới'
-            source = str(request.args.get('source') or "").lower()
-            is_tiktok = "tiktok" in source or "tiktok" in request.url
+    user = get_user(user_id)
+    if not user:
+        return "User not found", 404
+
+    balance_key = "balance_tiktok" if "tiktok" in network else "balance_shopee"
+    orders_key = "orders_tiktok" if "tiktok" in network else "orders_shopee"
+
+    current_balance = user.get(balance_key, 0) or 0
+    orders_list = user.get(orders_key, []) or []
+
+    # 1. TRẠNG THÁI: MỚI ĐẶT HÀNG / TẠM TÍNH (PENDING) -> CỘNG TIỀN NGAY LẬP TỨC
+    if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED"]:
+        order_info = f"🛒 Đơn #{order_id}: +{commission:,.0f}đ ({status})"
+        # Kiểm tra để tránh cộng trùng lặp nếu postback gửi lại nhiều lần
+        if not any(order_id in item for item in orders_list):
+            orders_list.append(order_info)
+            new_balance = current_balance + commission
             
-            user = get_user(target_id)
-            bal_s = user.get("balance_shopee", 0) if user else 0
-            bal_t = user.get("balance_tiktok", 0) if user else 0
-            orders_s = user.get("orders_shopee", []) if user else []
-            orders_t = user.get("orders_tiktok", []) if user else []
+            # Cập nhật vào Supabase
+            supabase.table('users').update({
+                balance_key: new_balance,
+                orders_key: orders_list
+            }).eq('id', user_id).execute()
 
-            if is_tiktok:
-                bal_t += cashback
-                orders_t.append(f"🛒 Hoàn tiền TikTok #{order_id}: +{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance_tiktok=bal_t, orders_tiktok=orders_t)
-                try: 
-                    bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (TikTok)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                except Exception: 
-                    pass
-            else:
-                bal_s += cashback
-                orders_s.append(f"🛒 Hoàn tiền Shopee #{order_id}: +{cashback:,.0f} VNĐ")
-                save_or_update_user(target_id, balance_shopee=bal_s, orders_shopee=orders_s)
-                try: 
-                    bot.send_message(target_id, f"🎉 CỘNG TIỀN HOÀN (Shopee)!\n💰 +{cashback:,.0f} VNĐ cho đơn #{order_id}")
-                except Exception: 
-                    pass
+            # Báo tin nhắn chúc mừng ngay cho khách qua Telegram
+            try:
+                bot.send_message(
+                    user_id, 
+                    f"🎉 **GHI NHẬN ĐƠN HÀNG MỚI!**\n\n"
+                    f"📦 Mã đơn: `{order_id}`\n"
+                    f"💰 Hoa hồng tạm tính: **+{commission:,.0f} VNĐ**\n"
+                    f"💳 Số dư hiện tại: **{new_balance:,.0f} VNĐ**\n\n"
+                    f"⚡ *Số tiền đã được cộng tạm tính vào tài khoản của bạn!*"
+                )
+            except Exception as e:
+                print(f"Lỗi gửi tin nhắn cho khách: {e}")
+
+    # 2. TRẠNG THÁI: ĐƠN BỊ HỦY / HOÀN (CANCELLED / REJECTED) -> TRỪ LẠI TIỀN
+    elif status in ["CANCELLED", "REJECTED", "FAILED"]:
+        new_balance = max(0, current_balance - commission)
+        order_info = f"❌ Đơn #{order_id}: -{commission:,.0f}đ (Đã hủy)"
+        orders_list.append(order_info)
+
+        supabase.table('users').update({
+            balance_key: new_balance,
+            orders_key: orders_list
+        }).eq('id', user_id).execute()
+
+        try:
+            bot.send_message(
+                user_id,
+                f"⚠️ **THÔNG BÁO THAY ĐỔI ĐƠN HÀNG**\n\n"
+                f"📦 Đơn hàng `{order_id}` của bạn đã bị hủy/hoàn.\n"
+                f"💸 Số tiền tạm tính (-{commission:,.0f}đ) đã được điều chỉnh.\n"
+                f"💳 Số dư hiện tại: **{new_balance:,.0f} VNĐ**"
+            )
         except Exception as e:
-            print("Lỗi xử lý Postback GET:", e)
-            
+            print(f"Lỗi gửi tin nhắn hủy đơn: {e}")
+
     return "OK", 200
 
 def run_bot():
