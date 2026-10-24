@@ -283,7 +283,43 @@ if bot:
             f"💰 **Tổng số dư:** `{total:,.0f} VNĐ`"
         )
         bot.reply_to(message, text, parse_mode="Markdown")
+    @bot.message_handler(commands=['users', 'danhsachall'])
+    def admin_list_users(message):
+        if str(message.from_user.id) != str(ADMIN_ID):
+            bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
+            return
+            
+        if not supabase:
+            bot.reply_to(message, "❌ Chưa kết nối cơ sở dữ liệu Supabase!")
+            return
 
+        try:
+            res = supabase.table('users').select('*').execute()
+            users_data = res.data or []
+            
+            if not users_data:
+                bot.reply_to(message, "📭 Chưa có người dùng nào trong hệ thống!")
+                return
+
+            text = f"📊 **DANH SÁCH NGƯỜI DÙNG & SỐ DƯ ({len(users_data)} users):**\n\n"
+            total_all = 0
+
+            for u in users_data:
+                uid = u.get("id", "N/A")
+                name = u.get("name", "Khách")
+                bal_s = u.get("balance_shopee", 0) or 0
+                bal_t = u.get("balance_tiktok", 0) or 0
+                u_total = bal_s + bal_t
+                total_all += u_total
+                
+                text += f"👤 `{uid}` - {name}\n"
+                text += f"   └ Shopee: {bal_s:,.0f}đ | TikTok: {bal_t:,.0f}đ | Tổng: `{u_total:,.0f}đ`\n"
+
+            text += f"\n💰 **TỔNG SỐ DƯ TOÀN HỆ THỐNG:** `{total_all:,.0f} VNĐ`"
+            bot.reply_to(message, text, parse_mode="Markdown")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Lỗi khi lấy danh sách: {e}")
+        
     @bot.message_handler(func=lambda msg: msg.text in ["❓ Hướng dẫn mua hàng", "/huongdan"])
     def guide(message):
         bot.reply_to(message, "📌 Gửi link sản phẩm trực tiếp vào đây để Bot tạo link hoàn tiền tự động nhé!")
