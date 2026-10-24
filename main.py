@@ -252,59 +252,6 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    @bot.message_handler(func=lambda message: message.text == "💳 Số dư & Rút tiền")
-def check_balance_and_payout(message):
-    uid = str(message.from_user.id)
-    
-    # 1. NẾU LÀ ADMIN (CHỦ BOT): Báo toàn bộ danh sách khách hàng và tổng số dư
-    if uid == str(ADMIN_ID):
-        try:
-            res = supabase.table("users").select("*").execute()
-            if res.data:
-                msg = f"📊 **DANH SÁCH KHÁCH HÀNG & SỐ DƯ ({len(res.data)} người):**\n\n"
-                total_system = 0
-                for u in res.data:
-                    name = u.get('name') or u.get('first_name') or 'Khách hàng'
-                    shopee = u.get('shopee_balance', 0) or 0
-                    tiktok = u.get('tiktok_balance', 0) or 0
-                    total_user = shopee + tiktok
-                    total_system += total_user
-                    msg += f"👤 ID: `{u.get('telegram_id')}` ({name})\n └ Shopee: {shopee:,.0f}đ | TikTok: {tiktok:,.0f}đ | Tổng: {total_user:,.0f}đ\n"
-                msg += f"\n💰 **TỔNG SỐ DƯ TOÀN HỆ THỐNG:**\n**{total_system:,.0f} VNĐ**"
-            else:
-                msg = "Chưa có dữ liệu khách hàng nào."
-        except Exception as e:
-            msg = f"Lỗi tải dữ liệu: {e}"
-        bot.reply_to(message, msg, parse_mode="Markdown")
-        return
-
-    # 2. NẾU LÀ KHÁCH HÀNG THƯỜNG: Hiện số dư tích lũy & Hướng dẫn rút tiền
-    try:
-        res = supabase.table("users").select("shopee_balance, tiktok_balance").eq("telegram_id", uid).execute()
-        if res.data:
-            shopee = res.data[0].get("shopee_balance", 0) or 0
-            tiktok = res.data[0].get("tiktok_balance", 0) or 0
-            total = shopee + tiktok
-            
-            msg = (
-                f"📊 **SỐ DƯ HOA HỒNG CỦA BẠN**\n\n"
-                f"🟠 Shopee: **{shopee:,.0f}đ**\n"
-                f"⚫ TikTok: **{tiktok:,.0f}đ**\n"
-                f"💰 **Tổng số dư khả dụng:** **{total:,.0f}đ**\n\n"
-                f"------------------------------\n"
-                f"🏦 **YÊU CẦU RÚT TIỀN HOA HỒNG:**\n"
-                f"Để rút tiền, bạn chỉ cần gửi tin nhắn trực tiếp vào ô chat này theo mẫu:\n"
-                f"👉 `Số tài khoản - Tên ngân hàng - Tên chủ tài khoản`\n"
-                f"*(Ví dụ: 1028xxx MB Bank NGO THI LIEN)*\n\n"
-                f"📩 Yêu cầu sẽ được chuyển trực tiếp đến Admin để thanh toán cho bạn!"
-            )
-        else:
-            msg = "❌ Chưa tìm thấy dữ liệu tài khoản của bạn trên hệ thống."
-    except Exception:
-        msg = "⚠️ Hệ thống đang cập nhật, vui lòng thử lại sau!"
-        
-    bot.reply_to(message, msg, parse_mode="Markdown")
-
     @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet"])
     def my_balance(message):
         user = get_user(message.from_user.id)
