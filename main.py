@@ -239,8 +239,9 @@ if bot:
         save_or_update_user(uid, name=first_name, username=username)
 
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📦 Đơn hàng của tôi", "💳 Ví & Số dư")
-        markup.add("❓ Hướng dẫn mua hàng", "💬 Hỗ trợ Admin")
+        markup.add("💳 Số dư & Rút tiền")
+        markup.add("❓ Hướng dẫn mua hàng") # Giữ lại nút hướng dẫn nếu có sẵn ở dòng dưới
+
         
         welcome_text = (
             f"👋 Chào mừng {first_name} đến với Bot Hoàn Tiền Tự Động!\n\n"
@@ -251,59 +252,58 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
     
-    @bot.message_handler(func=lambda msg: msg.text in ["danhsach", "/danhsach", "danh sách", "Danh sách", "📦 Đơn hàng của tôi"])
-    def my_orders(message):
-        uid = str(message.from_user.id)
-        
-        # NẾU LÀ ADMIN (CHỦ BOT): BÁO TOÀN BỘ ID KHÁCH HÀNG & SỐ DƯ
-        if uid == str(ADMIN_ID):
-            if not supabase:
-                bot.reply_to(message, "❌ Chưa kết nối cơ sở dữ liệu Supabase!")
-                return
-            try:
-                res = supabase.table('users').select('*').execute()
-                users_data = res.data or []
-                
-                if not users_data:
-                    bot.reply_to(message, "📭 Chưa có khách hàng nào trong hệ thống!")
-                    return
+    @bot.message_handler(func=lambda message: message.text == "💳 Số dư & Rút tiền")
+def check_balance_and_payout(message):
+    uid = str(message.from_user.id)
+    
+    # 1. NẾU LÀ ADMIN (CHỦ BOT): Báo toàn bộ danh sách khách hàng và tổng số dư
+    if uid == str(ADMIN_ID):
+        try:
+            res = supabase.table("users").select("*").execute()
+            if res.data:
+                msg = f"📊 **DANH SÁCH KHÁCH HÀNG & SỐ DƯ ({len(res.data)} người):**\n\n"
+                total_system = 0
+                for u in res.data:
+                    name = u.get('name') or u.get('first_name') or 'Khách hàng'
+                    shopee = u.get('shopee_balance', 0) or 0
+                    tiktok = u.get('tiktok_balance', 0) or 0
+                    total_user = shopee + tiktok
+                    total_system += total_user
+                    msg += f"👤 ID: `{u.get('telegram_id')}` ({name})\n └ Shopee: {shopee:,.0f}đ | TikTok: {tiktok:,.0f}đ | Tổng: {total_user:,.0f}đ\n"
+                msg += f"\n💰 **TỔNG SỐ DƯ TOÀN HỆ THỐNG:**\n**{total_system:,.0f} VNĐ**"
+            else:
+                msg = "Chưa có dữ liệu khách hàng nào."
+        except Exception as e:
+            msg = f"Lỗi tải dữ liệu: {e}"
+        bot.reply_to(message, msg, parse_mode="Markdown")
+        return
 
-                text = f"📊 **DANH SÁCH KHÁCH HÀNG & SỐ DƯ ({len(users_data)} người):**\n\n"
-                total_all = 0
-
-                for u in users_data:
-                    u_id = u.get("id", "N/A")
-                    name = u.get("name", "Khách")
-                    bal_s = u.get("balance_shopee", 0) or 0
-                    bal_t = u.get("balance_tiktok", 0) or 0
-                    u_total = bal_s + bal_t
-                    total_all += u_total
-                    
-                    text += f"👤 **ID:** `{u_id}` ({name})\n"
-                    text += f"   └ Shopee: {bal_s:,.0f}đ | TikTok: {bal_t:,.0f}đ | **Tổng: {u_total:,.0f}đ**\n"
-
-                text += f"\n💰 **TỔNG SỐ DƯ TOÀN HỆ THỐNG:** `{total_all:,.0f} VNĐ`"
-                bot.reply_to(message, text, parse_mode="Markdown")
-                return
-            except Exception as e:
-                bot.reply_to(message, f"❌ Lỗi lấy danh sách: {e}")
-                return
-
-        # NẾU LÀ KHÁCH HÀNG THƯỜNG: CHỈ HIỆN LỊCH SỬ CỦA HỌ
-        user = get_user(uid)
-        orders_s = user.get("orders_shopee", []) if user else []
-        orders_t = user.get("orders_tiktok", []) if user else []
-        
-        text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
-        text += "🛍️ **Shopee:**\n"
-        if not orders_s: text += "• Chưa có đơn Shopee nào.\n"
-        else: text += "".join([f"• {i}\n" for i in orders_s[-5:]])
+    # 2. NẾU LÀ KHÁCH HÀNG THƯỜNG: Hiện số dư tích lũy & Hướng dẫn rút tiền
+    try:
+        res = supabase.table("users").select("shopee_balance, tiktok_balance").eq("telegram_id", uid).execute()
+        if res.data:
+            shopee = res.data[0].get("shopee_balance", 0) or 0
+            tiktok = res.data[0].get("tiktok_balance", 0) or 0
+            total = shopee + tiktok
             
-        text += "\n🎵 **TikTok Shop:**\n"
-        if not orders_t: text += "• Chưa có đơn TikTok nào.\n"
-        else: text += "".join([f"• {i}\n" for i in orders_t[-5:]])
-            
-        bot.reply_to(message, text, parse_mode="Markdown")
+            msg = (
+                f"📊 **SỐ DƯ HOA HỒNG CỦA BẠN**\n\n"
+                f"🟠 Shopee: **{shopee:,.0f}đ**\n"
+                f"⚫ TikTok: **{tiktok:,.0f}đ**\n"
+                f"💰 **Tổng số dư khả dụng:** **{total:,.0f}đ**\n\n"
+                f"------------------------------\n"
+                f"🏦 **YÊU CẦU RÚT TIỀN HOA HỒNG:**\n"
+                f"Để rút tiền, bạn chỉ cần gửi tin nhắn trực tiếp vào ô chat này theo mẫu:\n"
+                f"👉 `Số tài khoản - Tên ngân hàng - Tên chủ tài khoản`\n"
+                f"*(Ví dụ: 1028xxx MB Bank NGO THI LIEN)*\n\n"
+                f"📩 Yêu cầu sẽ được chuyển trực tiếp đến Admin để thanh toán cho bạn!"
+            )
+        else:
+            msg = "❌ Chưa tìm thấy dữ liệu tài khoản của bạn trên hệ thống."
+    except Exception:
+        msg = "⚠️ Hệ thống đang cập nhật, vui lòng thử lại sau!"
+        
+    bot.reply_to(message, msg, parse_mode="Markdown")
         
 
     @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet"])
