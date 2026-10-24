@@ -383,6 +383,7 @@ if bot:
             )
         except Exception:
             pass
+    
 
     @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
     def convert_link(message):
@@ -515,7 +516,100 @@ def webhook():
             print(f"Lỗi gửi tin nhắn hủy đơn: {e}")
 
     return "OK", 200
+    
+# 1. Lệnh /chat: Nhắn tin riêng cho TỪNG KHÁCH HÀNG theo Telegram ID
+# Cú pháp: /chat <telegram_id> <Nội dung tin nhắn>
+@bot.message_handler(commands=['chat'])
+def admin_chat_single(message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
+        return
 
+    # Tách tin nhắn thành 3 phần: [/chat, telegram_id, nội dung]
+    parts = message.text.strip().split(maxsplit=2)
+    if len(parts) < 3:
+        bot.reply_to(
+            message, 
+            "⚠️ **Cú pháp sai!**\n👉 Dùng: `/chat <telegram_id> <Nội dung tin nhắn>`\n*Ví dụ:* `/chat 8860640969 Chào chị, đơn hàng đã được kiểm tra xong nhé!`", 
+            parse_mode="Markdown"
+        )
+        return
+
+    target_id = parts[1].strip()
+    content = parts[2].strip()
+
+    try:
+        msg_to_user = (
+            f"💬 **TIN NHẮN TỪ HỖ TRỢ KHÁCH HÀNG**\n\n"
+            f"{content}"
+        )
+        bot.send_message(target_id, msg_to_user, parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Đã gửi tin nhắn riêng thành công đến ID `{target_id}`!", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Không thể gửi tin nhắn cho ID `{target_id}`. Nguyên nhân: {e}", parse_mode="Markdown")
+
+
+# 2. Lệnh /nhan: Gửi tin nhắn HÀNG LOẠT cho TOÀN BỘ KHÁCH HÀNG trong hệ thống
+# Cú pháp: /nhan <Nội dung thông báo>
+@bot.message_handler(commands=['nhan'])
+def admin_chat_broadcast(message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
+        return
+
+    # Lấy toàn bộ nội dung phía sau chữ /nhan
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(
+            message, 
+            "⚠️ **Cú pháp sai!**\n👉 Dùng: `/nhan <Nội dung thông báo hàng loạt>`\n*Ví dụ:* `/nhan Siêu Sale 11/11: Hoàn tiền gấp đôi cho tất cả đơn Shopee hôm nay!`", 
+            parse_mode="Markdown"
+        )
+        return
+
+    content = parts[1].strip()
+
+    # Lấy danh sách tất cả người dùng từ bảng users trên Supabase
+    try:
+        users_response = supabase.table('users').select('id').execute()
+        users = users_response.data or []
+    except Exception as e:
+        bot.reply_to(message, f"❌ Lỗi truy vấn cơ sở dữ liệu Supabase: {e}")
+        return
+
+    if not users:
+        bot.reply_to(message, "ℹ️ Hệ thống hiện chưa có người dùng nào để gửi thông báo.")
+        return
+
+    bot.reply_to(message, f"⏳ Đang tiến hành gửi thông báo tới {len(users)} người dùng...")
+
+    success_count = 0
+    fail_count = 0
+
+    broadcast_msg = (
+        f"📢 **THÔNG BÁO TỪ HỆ THỐNG**\n\n"
+        f"{content}"
+    )
+
+    for u in users:
+        uid = u.get('id')
+        if not uid:
+            continue
+        try:
+            bot.send_message(uid, broadcast_msg, parse_mode="Markdown")
+            success_count += 1
+        except Exception:
+            # Trường hợp người dùng đã block bot hoặc ID không tồn tại
+            fail_count += 1
+
+    bot.reply_to(
+        message, 
+        f"🎉 **ĐÃ HOÀN TẤT GỬI THÔNG BÁO HÀNG LOẠT!**\n\n"
+        f"✅ Thành công: **{success_count}** người dùng\n"
+        f"❌ Thất bại (Do chặn bot/lỗi): **{fail_count}** người dùng", 
+        parse_mode="Markdown"
+    )
+    
 def run_bot():
     if bot:
         print("🤖 Telegram Bot polling started...")
