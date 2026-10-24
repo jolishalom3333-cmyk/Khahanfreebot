@@ -609,7 +609,33 @@ def admin_chat_broadcast(message):
         f"❌ Thất bại (Do chặn bot/lỗi): **{fail_count}** người dùng", 
         parse_mode="Markdown"
     )
+
+@bot.message_handler(func=lambda message: str(message.from_user.id) != str(ADMIN_ID) and not (message.text and message.text.startswith('/')))
+def forward_to_admin(message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "Khách hàng"
     
+    # Nếu khách gửi tin nhắn dạng văn bản (STK, câu hỏi...)
+    if message.text:
+        notification_text = (
+            f"📩 **CÓ TIN NHẮN MỚI TỪ KHÁCH HÀNG!**\n\n"
+            f"👤 **Khách:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"💬 **Nội dung:**\n{message.text}\n\n"
+            f"👉 *Trả lời nhanh:* `/chat {user_id} <nội dung>`"
+        )
+        bot.send_message(ADMIN_ID, notification_text, parse_mode="Markdown")
+        
+    # Nếu khách gửi hình ảnh (ảnh chụp màn hình STK...)
+    elif message.photo:
+        notification_text = (
+            f"📷 **KHÁCH GỬI HÌNH ẢNH!**\n\n"
+            f"👤 **Khách:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n\n"
+            f"👉 *Trả lời nhanh:* `/chat {user_id} <nội dung>`"
+        )
+        bot.send_message(ADMIN_ID, notification_text, parse_mode="Markdown")
+        
 def run_bot():
     if bot:
         print("🤖 Telegram Bot polling started...")
