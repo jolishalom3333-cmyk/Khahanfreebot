@@ -251,7 +251,7 @@ if bot:
             f"3️⃣ Bấm nút mua hàng để được ghi nhận hoàn tiền tự động."
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
-    
+
     @bot.message_handler(func=lambda message: message.text == "💳 Số dư & Rút tiền")
 def check_balance_and_payout(message):
     uid = str(message.from_user.id)
