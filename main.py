@@ -253,8 +253,8 @@ if bot:
         bot.reply_to(message, welcome_text, reply_markup=markup)
     
     @bot.message_handler(func=lambda message: message.text == "💳 Số dư & Rút tiền")
-def check_balance_and_payout(message):
-    uid = str(message.from_user.id)
+    def check_balance_and_payout(message):
+        uid = str(message.from_user.id)
     
     # 1. NẾU LÀ ADMIN (CHỦ BOT): Báo toàn bộ danh sách khách hàng và tổng số dư
     if uid == str(ADMIN_ID):
