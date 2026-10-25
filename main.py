@@ -22,13 +22,9 @@ SHOPEE_AFFILIATE_ID = os.environ.get('SHOPEE_AFFILIATE_ID', '17317720169').strip
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 ADDLIVETAG_API_KEY = os.environ.get('ADDLIVETAG_API_KEY', '').strip()
 
-# Tỷ lệ Cashback mặc định 70% cho khách (giữ lại 30% phí vận hành)
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 70)) / 100.0
-
-# Creator username kết nối trên RioHub
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
-# Danh sách Base URL chính thức và dự phòng của RioHub theo Spec
 RIOHUB_BASE_URLS = [
     "https://riohub.vn/api/v1",
     "https://riohub.riokupon.com/api/v1",
@@ -100,7 +96,6 @@ def log_click(user_id, raw_url):
 # ==========================================
 # 3. HÀM XỬ LÝ CHUYỂN ĐỔI LINK AFFILIATE
 # ==========================================
-
 def validate_sub_id(sub_id: str) -> bool:
     if not sub_id or not (1 <= len(sub_id) <= 128):
         return False
@@ -224,7 +219,7 @@ def convert_shopee_link(original_url: str, user_id: str) -> str:
         return None
 
 # ==========================================
-# 4. BOT TELEGRAM HANDLERS & LỆNH (2 NÚT MỚI)
+# 4. BOT TELEGRAM HANDLERS & LỆNH
 # ==========================================
 if bot:
     @bot.message_handler(commands=['start'])
@@ -234,7 +229,6 @@ if bot:
         username = message.from_user.username or ""
         save_or_update_user(uid, name=first_name, username=username)
 
-        # 2 nút bấm dưới khung chat đúng theo yêu cầu
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("💳 Số dư ví", "💸 Rút tiền")
 
@@ -247,7 +241,7 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    @bot.message_handler(func=lambda msg: msg.text in ["💳 Số dư ví", "/sodu", "/wallet", "💳 Số dư & Rút tiền"])
+    @bot.message_handler(func=lambda msg: msg.text in ["💳 Số dư ví", "/sodu", "/wallet", "💳 Ví & Số dư", "💳 Số dư & Rút tiền"])
     def my_balance(message):
         uid = str(message.from_user.id)
         user = get_user(uid)
@@ -385,7 +379,7 @@ if bot:
         bot.send_message(message.chat.id, caption_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 # ==========================================
-# 5. FLASK WEBHOOK POSTBACK (ĐÃ TÍCH HỢP LOG DEBUG RIOHUB)
+# 5. FLASK WEBHOOK POSTBACK (NHẬN ĐƠN RIOHUB)
 # ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
@@ -442,7 +436,6 @@ def webhook():
     current_balance = user.get(balance_key, 0) or 0
     orders_list = user.get(orders_key, []) or []
 
-    # 1. TRẠNG THÁI: MỚI ĐẶT HÀNG / TẠM TÍNH (PENDING) -> CỘNG TIỀN NGAY
     if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED", "SUCCESS"]:
         order_info = f"🛒 Đơn #{order_id}: +{commission:,.0f}đ ({status})"
         if not any(order_id in item for item in orders_list):
@@ -466,7 +459,6 @@ def webhook():
             except Exception as e:
                 print(f"Lỗi gửi tin nhắn cho khách: {e}")
 
-    # 2. TRẠNG THÁI: ĐƠN BỊ HỦY / HOÀN (CANCELLED / REJECTED) -> TRỪ LẠI TIỀN
     elif status in ["CANCELLED", "REJECTED", "FAILED"]:
         new_balance = max(0, current_balance - commission)
         order_info = f"❌ Đơn #{order_id}: -{commission:,.0f}đ (Đã hủy)"
