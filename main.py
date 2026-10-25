@@ -245,22 +245,22 @@ if bot:
     def my_balance(message):
         uid = str(message.from_user.id)
         user = get_user(uid)
-        bal_s = user.get("balance_shopee", 0) if user else 0
-        bal_t = user.get("balance_tiktok", 0) if user else 0
-        total = bal_s + bal_t
+        bal_s = user.get("balance_shopee", 0) if user and user.get("balance_shopee") is not None else 0
+        bal_t = user.get("balance_tiktok", 0) if user and user.get("balance_tiktok") is not None else 0
+        total = float(bal_s) + float(bal_t)
         
         text = (
             f"💳 **SỐ DƯ VÍ TÍCH LŨY CỦA BẠN:**\n\n"
-            f"🛍️ Số dư Shopee: **{bal_s:,.0f} VNĐ**\n"
-            f"🎵 Số dư TikTok: **{bal_t:,.0f} VNĐ**\n"
+            f"🛍️ Số dư Shopee: **{float(bal_s):,.0f} VNĐ**\n"
+            f"🎵 Số dư TikTok: **{float(bal_t):,.0f} VNĐ**\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"💰 **Tổng số dư ví:** `{total:,.0f} VNĐ`\n\n"
             f"💡 *Số tiền đã tự động cộng/trừ theo trạng thái đơn hàng thực tế của riêng bạn.*"
         )
         bot.reply_to(message, text, parse_mode="Markdown")
 
-        orders_s = user.get("orders_shopee", []) if user else []
-        orders_t = user.get("orders_tiktok", []) if user else []
+        orders_s = user.get("orders_shopee", []) if user and isinstance(user.get("orders_shopee"), list) else []
+        orders_t = user.get("orders_tiktok", []) if user and isinstance(user.get("orders_tiktok"), list) else []
         
         history_text = "📦 **LỊCH SỬ GIAO DỊCH ĐƠN HÀNG CỦA BẠN**:\n\n"
         history_text += "🛍️ **Shopee:**\n"
@@ -277,9 +277,9 @@ if bot:
     def request_withdrawal(message):
         uid = str(message.from_user.id)
         user = get_user(uid)
-        bal_s = user.get("balance_shopee", 0) if user else 0
-        bal_t = user.get("balance_tiktok", 0) if user else 0
-        total = bal_s + bal_t
+        bal_s = user.get("balance_shopee", 0) if user and user.get("balance_shopee") is not None else 0
+        bal_t = user.get("balance_tiktok", 0) if user and user.get("balance_tiktok") is not None else 0
+        total = float(bal_s) + float(bal_t)
 
         if total <= 0:
             bot.reply_to(message, "⚠️ Số dư ví của bạn hiện đang là **0 VNĐ**, chưa đủ điều kiện để rút tiền!")
@@ -321,9 +321,9 @@ if bot:
             bot.reply_to(message, f"❌ Không tìm thấy user có ID: `{target_id}` trong hệ thống!", parse_mode="Markdown")
             return
             
-        bal_s = user.get("balance_shopee", 0)
-        bal_t = user.get("balance_tiktok", 0)
-        total_pay = bal_s + bal_t
+        bal_s = user.get("balance_shopee", 0) or 0
+        bal_t = user.get("balance_tiktok", 0) or 0
+        total_pay = float(bal_s) + float(bal_t)
         
         if total_pay <= 0:
             bot.reply_to(message, f"⚠️ User `{target_id}` không có số dư để thanh toán!", parse_mode="Markdown")
@@ -379,7 +379,7 @@ if bot:
         bot.send_message(message.chat.id, caption_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 # ==========================================
-# 5. FLASK WEBHOOK POSTBACK (NHẬN ĐƠN RIOHUB)
+# 5. FLASK WEBHOOK POSTBACK (ĐÃ FIX AN TOÀN NONE TYPE)
 # ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
@@ -416,7 +416,7 @@ def webhook():
     try:
         commission = float(data.get("commission") or data.get("amount") or data.get("payout") or 0)
     except:
-        commission = 0
+        commission = 0.0
         
     status = str(data.get("status") or data.get("order_status") or "PENDING").upper()
     network = str(data.get("network") or data.get("platform") or "shopee").lower()
@@ -433,8 +433,12 @@ def webhook():
     balance_key = "balance_tiktok" if "tiktok" in network else "balance_shopee"
     orders_key = "orders_tiktok" if "tiktok" in network else "orders_shopee"
 
-    current_balance = user.get(balance_key, 0) or 0
-    orders_list = user.get(orders_key, []) or []
+    # Ép kiểu an toàn chống lỗi NoneType 100%
+    raw_bal = user.get(balance_key)
+    current_balance = float(raw_bal) if raw_bal is not None else 0.0
+
+    raw_orders = user.get(orders_key)
+    orders_list = raw_orders if isinstance(raw_orders, list) else []
 
     if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED", "SUCCESS"]:
         order_info = f"🛒 Đơn #{order_id}: +{commission:,.0f}đ ({status})"
@@ -460,7 +464,7 @@ def webhook():
                 print(f"Lỗi gửi tin nhắn cho khách: {e}")
 
     elif status in ["CANCELLED", "REJECTED", "FAILED"]:
-        new_balance = max(0, current_balance - commission)
+        new_balance = max(0.0, current_balance - commission)
         order_info = f"❌ Đơn #{order_id}: -{commission:,.0f}đ (Đã hủy)"
         orders_list.append(order_info)
 
