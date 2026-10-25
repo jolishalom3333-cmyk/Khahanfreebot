@@ -291,7 +291,7 @@ if bot:
             f"👉 **Hướng dẫn:** Vui lòng nhắn tin trực tiếp vào đây thông tin nhận tiền của bạn theo mẫu:\n"
             f"• **Tên ngân hàng:**\n"
             f"• **Số tài khoản:**\n"
-            f"• **Tên chủ tài khoản:** (Ví dụ: NGO THI LIEN)\n\n"
+            f"• **Tên chủ tài khoản:** (Ví dụ: NGUYEN THI LINH)\n\n"
             f"⏳ Sau khi bạn gửi thông tin, hệ thống sẽ chuyển tiếp ngay cho Admin để xét duyệt và chuyển khoản cho bạn!"
         )
         bot.reply_to(message, msg, parse_mode="Markdown")
