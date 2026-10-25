@@ -185,9 +185,7 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
     return None, "Không thể kết nối tới máy chủ RioHub!"
 
 def clean_shopee_url(raw_url: str) -> str:
-    """Mở rộng link ngắn s.shopee.vn/shp.ee và làm sạch các tham số tracking rác"""
     target_url = raw_url.strip()
-    
     if "s.shopee" in target_url.lower() or "shp.ee" in target_url.lower():
         try:
             r = requests.head(target_url, allow_redirects=True, timeout=8)
@@ -203,11 +201,9 @@ def clean_shopee_url(raw_url: str) -> str:
     clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     if clean_url.endswith('/'):
         clean_url = clean_url[:-1]
-        
     return clean_url
 
 def convert_shopee_link(original_url: str, user_id: str) -> str:
-    """Khởi tạo link Affiliate Shopee chuẩn cơ chế an_redir 2026"""
     try:
         if not SHOPEE_AFFILIATE_ID:
             print("❌ Thiếu SHOPEE_AFFILIATE_ID!")
@@ -228,7 +224,7 @@ def convert_shopee_link(original_url: str, user_id: str) -> str:
         return None
 
 # ==========================================
-# 4. BOT TELEGRAM HANDLERS & LỆNH
+# 4. BOT TELEGRAM HANDLERS & LỆNH (2 NÚT MỚI)
 # ==========================================
 if bot:
     @bot.message_handler(commands=['start'])
@@ -238,9 +234,9 @@ if bot:
         username = message.from_user.username or ""
         save_or_update_user(uid, name=first_name, username=username)
 
+        # 2 nút bấm dưới khung chat đúng theo yêu cầu
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("💳 Số dư & Rút tiền")
-        markup.add("❓ Hướng dẫn mua hàng")
+        markup.add("💳 Số dư ví", "💸 Rút tiền")
 
         welcome_text = (
             f"👋 Chào mừng {first_name} đến với Bot Hoàn Tiền Tự Động!\n\n"
@@ -251,7 +247,7 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet", "💳 Số dư & Rút tiền"])
+    @bot.message_handler(func=lambda msg: msg.text in ["💳 Số dư ví", "/sodu", "/wallet", "💳 Số dư & Rút tiền"])
     def my_balance(message):
         uid = str(message.from_user.id)
         user = get_user(uid)
@@ -264,14 +260,15 @@ if bot:
             f"🛍️ Số dư Shopee: **{bal_s:,.0f} VNĐ**\n"
             f"🎵 Số dư TikTok: **{bal_t:,.0f} VNĐ**\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **Tổng số dư:** `{total:,.0f} VNĐ`"
+            f"💰 **Tổng số dư ví:** `{total:,.0f} VNĐ`\n\n"
+            f"💡 *Số tiền đã tự động cộng/trừ theo trạng thái đơn hàng thực tế của riêng bạn.*"
         )
         bot.reply_to(message, text, parse_mode="Markdown")
 
         orders_s = user.get("orders_shopee", []) if user else []
         orders_t = user.get("orders_tiktok", []) if user else []
         
-        history_text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
+        history_text = "📦 **LỊCH SỬ GIAO DỊCH ĐƠN HÀNG CỦA BẠN**:\n\n"
         history_text += "🛍️ **Shopee:**\n"
         if not orders_s: history_text += "• Chưa có đơn Shopee nào.\n"
         else: history_text += "".join([f"• {i}\n" for i in orders_s[-5:]])
@@ -281,6 +278,29 @@ if bot:
         else: history_text += "".join([f"• {i}\n" for i in orders_t[-5:]])
             
         bot.reply_to(message, history_text, parse_mode="Markdown")
+
+    @bot.message_handler(func=lambda msg: msg.text in ["💸 Rút tiền", "/ruttien"])
+    def request_withdrawal(message):
+        uid = str(message.from_user.id)
+        user = get_user(uid)
+        bal_s = user.get("balance_shopee", 0) if user else 0
+        bal_t = user.get("balance_tiktok", 0) if user else 0
+        total = bal_s + bal_t
+
+        if total <= 0:
+            bot.reply_to(message, "⚠️ Số dư ví của bạn hiện đang là **0 VNĐ**, chưa đủ điều kiện để rút tiền!")
+            return
+
+        msg = (
+            f"💸 **YÊU CẦU RÚT TIỀN HOA HỒNG**\n\n"
+            f"💳 Tổng số dư ví hiện có thể rút: **{total:,.0f} VNĐ**\n\n"
+            f"👉 **Hướng dẫn:** Vui lòng nhắn tin trực tiếp vào đây thông tin nhận tiền của bạn theo mẫu:\n"
+            f"• **Tên ngân hàng:**\n"
+            f"• **Số tài khoản:**\n"
+            f"• **Tên chủ tài khoản:** (Ví dụ: NGO THI LIEN)\n\n"
+            f"⏳ Sau khi bạn gửi thông tin, hệ thống sẽ chuyển tiếp ngay cho Admin để xét duyệt và chuyển khoản cho bạn!"
+        )
+        bot.reply_to(message, msg, parse_mode="Markdown")
         
     @bot.message_handler(func=lambda msg: msg.text in ["❓ Hướng dẫn mua hàng", "/huongdan"])
     def guide(message):
@@ -365,7 +385,7 @@ if bot:
         bot.send_message(message.chat.id, caption_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 # ==========================================
-# 5. FLASK WEBHOOK POSTBACK (ĐÃ THÊM /tiktok-postback CHUẨN XÁC)
+# 5. FLASK WEBHOOK POSTBACK (ĐÃ TÍCH HỢP LOG DEBUG RIOHUB)
 # ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
@@ -374,33 +394,47 @@ def webhook():
     if request.method == 'HEAD':
         return "", 200
         
+    print(f"📥 Nhận request từ RioHub - Method: {request.method}")
+    
+    data = {}
     try:
         if request.method == 'GET':
             data = request.args.to_dict()
         else:
-            data = request.get_json(silent=True) or request.form.to_dict()
-    except Exception:
-        data = {}
+            data = request.get_json(silent=True) or request.form.to_dict() or {}
+    except Exception as e:
+        print(f"❌ Lỗi đọc JSON/Form: {e}")
+
+    print(f"📥 Dữ liệu RioHub gửi sang: {data}")
 
     if not data:
         return "No data", 400
 
-    user_id = str(data.get("sub_id") or data.get("uid") or data.get("target_id") or "")
-    order_id = str(data.get("order_id") or data.get("id") or "")
+    user_id = str(
+        data.get("sub_id") or 
+        data.get("uid") or 
+        data.get("target_id") or 
+        data.get("click_id") or 
+        data.get("customer_id") or ""
+    ).strip()
+    
+    order_id = str(data.get("order_id") or data.get("id") or data.get("trans_id") or "UNKNOWN")
     try:
-        commission = float(data.get("commission") or data.get("amount") or 0)
+        commission = float(data.get("commission") or data.get("amount") or data.get("payout") or 0)
     except:
         commission = 0
         
-    status = str(data.get("status") or "PENDING").upper()
+    status = str(data.get("status") or data.get("order_status") or "PENDING").upper()
     network = str(data.get("network") or data.get("platform") or "shopee").lower()
 
     if not user_id:
-        return "Missing user_id", 400
+        print(f"⚠️ Cảnh báo: Không tìm thấy user_id/sub_id trong data: {data}")
+        return "Missing user_id", 200
 
     user = get_user(user_id)
     if not user:
-        return "User not found", 404
+        print(f"⚠️ Cảnh báo: Không tìm thấy user trong database với ID: {user_id}")
+        return "User not found", 200
 
     balance_key = "balance_tiktok" if "tiktok" in network else "balance_shopee"
     orders_key = "orders_tiktok" if "tiktok" in network else "orders_shopee"
@@ -408,8 +442,8 @@ def webhook():
     current_balance = user.get(balance_key, 0) or 0
     orders_list = user.get(orders_key, []) or []
 
-    # 1. TRẠNG THÁI: MỚI ĐẶT HÀNG / TẠM TÍNH (PENDING) -> CỘNG TIỀN NGAY LẬP TỨC
-    if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED"]:
+    # 1. TRẠNG THÁI: MỚI ĐẶT HÀNG / TẠM TÍNH (PENDING) -> CỘNG TIỀN NGAY
+    if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED", "SUCCESS"]:
         order_info = f"🛒 Đơn #{order_id}: +{commission:,.0f}đ ({status})"
         if not any(order_id in item for item in orders_list):
             orders_list.append(order_info)
@@ -426,7 +460,7 @@ def webhook():
                     f"🎉 **GHI NHẬN ĐƠN HÀNG MỚI!**\n\n"
                     f"📦 Mã đơn: `{order_id}`\n"
                     f"💰 Hoa hồng tạm tính: **+{commission:,.0f} VNĐ**\n"
-                    f"💳 Số dư hiện tại: **{new_balance:,.0f} VNĐ**\n\n"
+                    f"💳 Số dư ví hiện tại: **{new_balance:,.0f} VNĐ**\n\n"
                     f"⚡ *Số tiền đã được cộng tạm tính vào tài khoản của bạn!*"
                 )
             except Exception as e:
@@ -447,9 +481,9 @@ def webhook():
             bot.send_message(
                 user_id,
                 f"⚠️ **THÔNG BÁO THAY ĐỔI ĐƠN HÀNG**\n\n"
-                f"📦 Đơn hàng `{order_id}` của bạn đã bị hủy/hohn.\n"
+                f"📦 Đơn hàng `{order_id}` của bạn đã bị hủy/hoàn.\n"
                 f"💸 Số tiền tạm tính (-{commission:,.0f}đ) đã được điều chỉnh.\n"
-                f"💳 Số dư hiện tại: **{new_balance:,.0f} VNĐ**"
+                f"💳 Số dư ví hiện tại: **{new_balance:,.0f} VNĐ**"
             )
         except Exception as e:
             print(f"Lỗi gửi tin nhắn hủy đơn: {e}")
@@ -550,7 +584,7 @@ def forward_to_admin(message):
     
     if message.text:
         notification_text = (
-            f"📩 **CÓ TIN NHẮN MỚI TỪ KHÁCH HÀNG!**\n\n"
+            f"📩 **CÓ YÊU CẦU/TIN NHẮN MỚI TỪ KHÁCH HÀNG!**\n\n"
             f"👤 **Khách:** {user_name}\n"
             f"🆔 **ID:** `{user_id}`\n"
             f"💬 **Nội dung:**\n{message.text}\n\n"
@@ -560,7 +594,7 @@ def forward_to_admin(message):
         
     elif message.photo:
         notification_text = (
-            f"📷 **KHÁCH GỬI HÌNH ẢNH!**\n\n"
+            f"📷 **KHÁCH GỬI HÌNH ẢNH (STK/GÓP Ý)!**\n\n"
             f"👤 **Khách:** {user_name}\n"
             f"🆔 **ID:** `{user_id}`\n\n"
             f"👉 *Trả lời nhanh:* `/chat {user_id} <nội dung>`"
