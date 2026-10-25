@@ -240,9 +240,8 @@ if bot:
 
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("💳 Số dư & Rút tiền")
-        markup.add("❓ Hướng dẫn mua hàng") # Giữ lại nút hướng dẫn nếu có sẵn ở dòng dưới
+        markup.add("❓ Hướng dẫn mua hàng")
 
-        
         welcome_text = (
             f"👋 Chào mừng {first_name} đến với Bot Hoàn Tiền Tự Động!\n\n"
             f"🛒 Cách nhận hoàn tiền {int(CASHBACK_RATE * 100)}%:\n"
@@ -252,9 +251,10 @@ if bot:
         )
         bot.reply_to(message, welcome_text, reply_markup=markup)
 
-    @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet"])
+    @bot.message_handler(func=lambda msg: msg.text in ["💳 Ví & Số dư", "/sodu", "/wallet", "💳 Số dư & Rút tiền"])
     def my_balance(message):
-        user = get_user(message.from_user.id)
+        uid = str(message.from_user.id)
+        user = get_user(uid)
         bal_s = user.get("balance_shopee", 0) if user else 0
         bal_t = user.get("balance_tiktok", 0) if user else 0
         total = bal_s + bal_t
@@ -268,21 +268,19 @@ if bot:
         )
         bot.reply_to(message, text, parse_mode="Markdown")
 
-        # NẾU LÀ KHÁCH HÀNG THƯỜNG: CHỈ HIỆN LỊCH SỬ CỦA HỌ
-        user = get_user(uid)
         orders_s = user.get("orders_shopee", []) if user else []
         orders_t = user.get("orders_tiktok", []) if user else []
         
-        text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
-        text += "🛍️ **Shopee:**\n"
-        if not orders_s: text += "• Chưa có đơn Shopee nào.\n"
-        else: text += "".join([f"• {i}\n" for i in orders_s[-5:]])
+        history_text = "📦 **LỊCH SỬ ĐƠN HÀNG CỦA BẠN**:\n\n"
+        history_text += "🛍️ **Shopee:**\n"
+        if not orders_s: history_text += "• Chưa có đơn Shopee nào.\n"
+        else: history_text += "".join([f"• {i}\n" for i in orders_s[-5:]])
             
-        text += "\n🎵 **TikTok Shop:**\n"
-        if not orders_t: text += "• Chưa có đơn TikTok nào.\n"
-        else: text += "".join([f"• {i}\n" for i in orders_t[-5:]])
+        history_text += "\n🎵 **TikTok Shop:**\n"
+        if not orders_t: history_text += "• Chưa có đơn TikTok nào.\n"
+        else: history_text += "".join([f"• {i}\n" for i in orders_t[-5:]])
             
-        bot.reply_to(message, text, parse_mode="Markdown")
+        bot.reply_to(message, history_text, parse_mode="Markdown")
         
     @bot.message_handler(func=lambda msg: msg.text in ["❓ Hướng dẫn mua hàng", "/huongdan"])
     def guide(message):
@@ -329,7 +327,6 @@ if bot:
             )
         except Exception:
             pass
-    
 
     @bot.message_handler(func=lambda msg: msg.text is not None and msg.text.startswith("http"))
     def convert_link(message):
@@ -368,15 +365,15 @@ if bot:
         bot.send_message(message.chat.id, caption_text, parse_mode="Markdown", reply_markup=inline_kb)
 
 # ==========================================
-# 5. FLASK WEBHOOK POSTBACK (CỘNG TIỀN TÁCH BIỆT)
+# 5. FLASK WEBHOOK POSTBACK (ĐÃ THÊM /tiktok-postback CHUẨN XÁC)
 # ==========================================
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 @app.route('/postback', methods=['GET', 'POST', 'HEAD'])
+@app.route('/tiktok-postback', methods=['GET', 'POST', 'HEAD'])
 def webhook():
     if request.method == 'HEAD':
         return "", 200
         
-    # Hỗ trợ lấy dữ liệu từ cả GET (request.args) và POST (json/form)
     try:
         if request.method == 'GET':
             data = request.args.to_dict()
@@ -388,7 +385,6 @@ def webhook():
     if not data:
         return "No data", 400
 
-    # Lấy thông tin từ thông báo Postback
     user_id = str(data.get("sub_id") or data.get("uid") or data.get("target_id") or "")
     order_id = str(data.get("order_id") or data.get("id") or "")
     try:
@@ -415,18 +411,15 @@ def webhook():
     # 1. TRẠNG THÁI: MỚI ĐẶT HÀNG / TẠM TÍNH (PENDING) -> CỘNG TIỀN NGAY LẬP TỨC
     if status in ["PENDING", "NEW", "PROCESSING", "WAITING", "APPROVED"]:
         order_info = f"🛒 Đơn #{order_id}: +{commission:,.0f}đ ({status})"
-        # Kiểm tra để tránh cộng trùng lặp nếu postback gửi lại nhiều lần
         if not any(order_id in item for item in orders_list):
             orders_list.append(order_info)
             new_balance = current_balance + commission
             
-            # Cập nhật vào Supabase
             supabase.table('users').update({
                 balance_key: new_balance,
                 orders_key: orders_list
             }).eq('id', user_id).execute()
 
-            # Báo tin nhắn chúc mừng ngay cho khách qua Telegram
             try:
                 bot.send_message(
                     user_id, 
@@ -454,7 +447,7 @@ def webhook():
             bot.send_message(
                 user_id,
                 f"⚠️ **THÔNG BÁO THAY ĐỔI ĐƠN HÀNG**\n\n"
-                f"📦 Đơn hàng `{order_id}` của bạn đã bị hủy/hoàn.\n"
+                f"📦 Đơn hàng `{order_id}` của bạn đã bị hủy/hohn.\n"
                 f"💸 Số tiền tạm tính (-{commission:,.0f}đ) đã được điều chỉnh.\n"
                 f"💳 Số dư hiện tại: **{new_balance:,.0f} VNĐ**"
             )
@@ -462,16 +455,16 @@ def webhook():
             print(f"Lỗi gửi tin nhắn hủy đơn: {e}")
 
     return "OK", 200
-    
-# 1. Lệnh /chat: Nhắn tin riêng cho TỪNG KHÁCH HÀNG theo Telegram ID
-# Cú pháp: /chat <telegram_id> <Nội dung tin nhắn>
+
+# ==========================================
+# 6. CÁC LỆNH ADMIN QUẢN LÝ / CHAT / BROADCAST
+# ==========================================
 @bot.message_handler(commands=['chat'])
 def admin_chat_single(message):
     if str(message.from_user.id) != str(ADMIN_ID):
         bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
         return
 
-    # Tách tin nhắn thành 3 phần: [/chat, telegram_id, nội dung]
     parts = message.text.strip().split(maxsplit=2)
     if len(parts) < 3:
         bot.reply_to(
@@ -494,16 +487,12 @@ def admin_chat_single(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Không thể gửi tin nhắn cho ID `{target_id}`. Nguyên nhân: {e}", parse_mode="Markdown")
 
-
-# 2. Lệnh /nhan: Gửi tin nhắn HÀNG LOẠT cho TOÀN BỘ KHÁCH HÀNG trong hệ thống
-# Cú pháp: /nhan <Nội dung thông báo>
 @bot.message_handler(commands=['nhan'])
 def admin_chat_broadcast(message):
     if str(message.from_user.id) != str(ADMIN_ID):
         bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
         return
 
-    # Lấy toàn bộ nội dung phía sau chữ /nhan
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2:
         bot.reply_to(
@@ -515,7 +504,6 @@ def admin_chat_broadcast(message):
 
     content = parts[1].strip()
 
-    # Lấy danh sách tất cả người dùng từ bảng users trên Supabase
     try:
         users_response = supabase.table('users').select('id').execute()
         users = users_response.data or []
@@ -545,7 +533,6 @@ def admin_chat_broadcast(message):
             bot.send_message(uid, broadcast_msg, parse_mode="Markdown")
             success_count += 1
         except Exception:
-            # Trường hợp người dùng đã block bot hoặc ID không tồn tại
             fail_count += 1
 
     bot.reply_to(
@@ -561,7 +548,6 @@ def forward_to_admin(message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "Khách hàng"
     
-    # Nếu khách gửi tin nhắn dạng văn bản (STK, câu hỏi...)
     if message.text:
         notification_text = (
             f"📩 **CÓ TIN NHẮN MỚI TỪ KHÁCH HÀNG!**\n\n"
@@ -572,7 +558,6 @@ def forward_to_admin(message):
         )
         bot.send_message(ADMIN_ID, notification_text, parse_mode="Markdown")
         
-    # Nếu khách gửi hình ảnh (ảnh chụp màn hình STK...)
     elif message.photo:
         notification_text = (
             f"📷 **KHÁCH GỬI HÌNH ẢNH!**\n\n"
