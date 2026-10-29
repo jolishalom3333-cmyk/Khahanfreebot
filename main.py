@@ -1,9 +1,11 @@
 import os
 import re
 import json
+import time
 from datetime import datetime
 from urllib.parse import quote, urlparse
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import requests
 
 # ==========================================
@@ -25,6 +27,7 @@ RIOHUB_BASE_URLS = [
 ]
 
 app = Flask(__name__)
+CORS(app) # 👈 Đã thêm CORS để website gọi sang không bị chặn
 
 # ==========================================
 # 2. KẾT NỐI CƠ SỞ DỮ LIỆU SUPABASE
