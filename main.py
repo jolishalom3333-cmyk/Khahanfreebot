@@ -219,7 +219,46 @@ def web_convert_link():
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)} "}), 500
+
+# ==========================================
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BỔ SUNG MỚI)
+# ==========================================
+@app.route('/api/riohub-webhook', methods=['POST'])
+def riohub_webhook():
+    try:
+        data = request.get_json(silent=True) or {}
+        
+        # Nhận thông tin đơn hàng từ Riohub gửi sang
+        sub_id = str(data.get('sub_id', '')).strip() # Ví dụ: "joli-123"
+        order_id = str(data.get('order_id', '')).strip()
+        commission_goc = float(data.get('commission', 0)) # Hoa hồng gốc (vd: 5500)
+        status = str(data.get('status', 'pending')).strip() # pending, completed, cancelled...
+
+        if not sub_id or not order_id:
+            return jsonify({"success": False, "error": "Thiếu sub_id hoặc order_id"}), 400
+
+        # Tách user_id từ sub_id (ví dụ "joli-123" tách lấy "123")
+        user_id = sub_id.replace("joli-", "").strip()
+
+        # Công thức: Trừ 40% phí thuế -> Khách nhận 60% thực nhận
+        thuc_nhan = commission_goc * 0.6
+
+        if supabase:
+            # Lưu hoặc cập nhật đơn hàng vào bảng 'transactions' trên Supabase
+            supabase.table('transactions').upsert({
+                "order_id": order_id,
+                "user_id": user_id,
+                "commission_goc": commission_goc,
+                "thuc_nhan": thuc_nhan,
+                "status": status,
+                "updated_at": datetime.now().isoformat()
+            }, on_conflict="order_id").execute()
+
+        return jsonify({"success": True, "message": "Đã đồng bộ đơn hàng về Supabase thành công!"}), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Lỗi webhook: {str(e)}"}), 500
 
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
@@ -227,4 +266,4 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    
+           
