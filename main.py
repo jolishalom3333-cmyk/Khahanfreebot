@@ -2,7 +2,7 @@ import os
 import re
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -16,6 +16,9 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
 SHOPEE_AFFILIATE_ID = os.environ.get('SHOPEE_AFFILIATE_ID', '17317720169').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
+
+# 👉 BỔ SUNG: Thêm biến lấy Shopee API Key chuẩn xác 2026
+SHOPEE_API_KEY = os.environ.get('SHOPEE_API_KEY', '99ba514854ed2fdf9b68b6a913aa8192a1021272ee82f639').strip()
 
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 70)) / 100.0
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
@@ -181,6 +184,41 @@ def convert_shopee_link(original_url: str, user_id: str) -> str:
         return None
 
 # ==========================================
+# 4.1 BỔ SUNG: HÀM ĐỒNG BỘ ĐƠN HÀNG SHOPEE TỪ ADDLIVETAG
+# ==========================================
+def sync_shopee_orders():
+    if not supabase or not SHOPEE_API_KEY:
+        return
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        past_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        
+        url = f"https://addlivetag.com/api/v1/conversions.php?api_key={SHOPEE_API_KEY}&type=items&from={past_date}&to={today}"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            orders = data.get('data', []) or data.get('items', []) or []
+            for item in orders:
+                order_id = str(item.get('order_id') or item.get('order_sn', '')).strip()
+                sub_id = str(item.get('sub_id', '')).strip()
+                commission_goc = float(item.get('commission') or item.get('estimated_commission', 0))
+                status = str(item.get('status', 'pending')).strip()
+
+                if order_id and sub_id and "joli-" in sub_id:
+                    user_id = sub_id.replace("joli-", "").strip()
+                    thuc_nhan = commission_goc * 0.6
+                    supabase.table('transactions').upsert({
+                        "order_id": order_id,
+                        "user_id": user_id,
+                        "commission_goc": commission_goc,
+                        "thuc_nhan": thuc_nhan,
+                        "status": status,
+                        "updated_at": datetime.now().isoformat()
+                    }, on_conflict="order_id").execute()
+    except Exception as e:
+        print(f"Lỗi đồng bộ Shopee: {e}")
+
+# ==========================================
 # 5. API CHÍNH CHO WEBSITE (DÁN LINK TRỰC TIẾP)
 # ==========================================
 @app.route('/api/convert', methods=['POST'])
@@ -222,30 +260,25 @@ def web_convert_link():
         return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)} "}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BỔ SUNG MỚI)
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (GIỮ NGUYÊN)
 # ==========================================
 @app.route('/api/riohub-webhook', methods=['POST'])
 def riohub_webhook():
     try:
         data = request.get_json(silent=True) or {}
         
-        # Nhận thông tin đơn hàng từ Riohub gửi sang
-        sub_id = str(data.get('sub_id', '')).strip() # Ví dụ: "joli-123"
+        sub_id = str(data.get('sub_id', '')).strip() 
         order_id = str(data.get('order_id', '')).strip()
-        commission_goc = float(data.get('commission', 0)) # Hoa hồng gốc (vd: 5500)
-        status = str(data.get('status', 'pending')).strip() # pending, completed, cancelled...
+        commission_goc = float(data.get('commission', 0)) 
+        status = str(data.get('status', 'pending')).strip() 
 
         if not sub_id or not order_id:
             return jsonify({"success": False, "error": "Thiếu sub_id hoặc order_id"}), 400
 
-        # Tách user_id từ sub_id (ví dụ "joli-123" tách lấy "123")
         user_id = sub_id.replace("joli-", "").strip()
-
-        # Công thức: Trừ 40% phí thuế -> Khách nhận 60% thực nhận
         thuc_nhan = commission_goc * 0.6
 
         if supabase:
-            # Lưu hoặc cập nhật đơn hàng vào bảng 'transactions' trên Supabase
             supabase.table('transactions').upsert({
                 "order_id": order_id,
                 "user_id": user_id,
@@ -260,10 +293,21 @@ def riohub_webhook():
     except Exception as e:
         return jsonify({"success": False, "error": f"Lỗi webhook: {str(e)}"}), 500
 
+# ==========================================
+# 6.1 BỔ SUNG: API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG/ĐỊNH KỲ
+# ==========================================
+@app.route('/api/sync-shopee', methods=['GET', 'POST'])
+def trigger_sync_shopee():
+    try:
+        sync_shopee_orders()
+        return jsonify({"success": True, "message": "Đã quét và đồng bộ đơn hàng Shopee thành công!"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
     return "Joli Affiliate Server is Running!", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-           
+    
