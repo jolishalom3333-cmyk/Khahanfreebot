@@ -219,6 +219,33 @@ def sync_shopee_orders():
         print(f"Lỗi đồng bộ Shopee: {e}")
 
 # ==========================================
+# 4.2 BỔ SUNG: HÀM LẤY THÔNG TIN SẢN PHẨM SHOPEE (ĐỂ HIỂN THỊ ẢNH, TÊN, GIÁ)
+# ==========================================
+def get_shopee_product_info(original_url: str):
+    if not SHOPEE_API_KEY:
+        return None
+    try:
+        api_url = f"https://addlivetag.com/api/v1/product.php?api_key={SHOPEE_API_KEY}&url={quote(original_url)}"
+        res = requests.get(api_url, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            return {
+                "title": data.get("title") or data.get("name", "Sản phẩm Shopee"),
+                "image": data.get("image") or data.get("thumbnail", ""),
+                "price": data.get("price", 0),
+                "commission_rate": data.get("commission_rate", 5)
+            }
+    except Exception as e:
+        print(f"Lỗi lấy thông tin sản phẩm: {e}")
+    
+    return {
+        "title": "Sản phẩm mua sắm qua Shopee Affiliate",
+        "image": "",
+        "price": 0,
+        "commission_rate": 5
+    }
+
+# ==========================================
 # 5. API CHÍNH CHO WEBSITE (DÁN LINK TRỰC TIẾP)
 # ==========================================
 @app.route('/api/convert', methods=['POST'])
@@ -235,6 +262,8 @@ def web_convert_link():
         
         afflink = None
         platform = ""
+        prod_info = {"title": "Sản phẩm Affiliate", "image": "", "price": 0}
+        cashback_amount = 0
 
         if "tiktok" in raw_url.lower():
             platform = "TikTok Shop"
@@ -247,13 +276,22 @@ def web_convert_link():
             afflink = convert_shopee_link(raw_url, user_id)
             if not afflink:
                 return jsonify({"success": False, "error": "Lỗi Shopee: Không thể khởi tạo link mua hàng."}), 400
+            
+            # Lấy thông tin sản phẩm và tính tiền hoàn dự kiến
+            prod_info = get_shopee_product_info(raw_url)
+            estimated_commission = (prod_info["price"] * prod_info["commission_rate"] / 100) if prod_info["price"] > 0 else 5000
+            cashback_amount = int(estimated_commission * CASHBACK_RATE)
         else:
             return jsonify({"success": False, "error": "Hệ thống chỉ hỗ trợ tạo link cho Shopee và TikTok Shop!"}), 400
 
         return jsonify({
             "success": True,
             "platform": platform,
-            "affiliate_link": afflink
+            "affiliate_link": afflink,
+            "product_title": prod_info["title"],
+            "product_image": prod_info["image"],
+            "product_price": prod_info["price"],
+            "cashback_preview": cashback_amount
         })
 
     except Exception as e:
@@ -310,4 +348,4 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    
+            
