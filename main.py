@@ -16,8 +16,6 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '').strip()
 
 SHOPEE_AFFILIATE_ID = os.environ.get('SHOPEE_AFFILIATE_ID', '17317720169').strip()
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
-
-# 👉 BỔ SUNG: Thêm biến lấy Shopee API Key chuẩn xác 2026
 SHOPEE_API_KEY = os.environ.get('SHOPEE_API_KEY', '99ba514854ed2fdf9b68b6a913aa8192a1021272ee82f639').strip()
 
 CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 70)) / 100.0
@@ -30,7 +28,7 @@ RIOHUB_BASE_URLS = [
 ]
 
 app = Flask(__name__)
-CORS(app) # 👈 Đã thêm CORS để website gọi sang không bị chặn
+CORS(app)
 
 # ==========================================
 # 2. KẾT NỐI CƠ SỞ DỮ LIỆU SUPABASE
@@ -58,20 +56,15 @@ def log_click(user_id, raw_url):
 # ==========================================
 # 3. HÀM XỬ LÝ CHUYỂN ĐỔI LINK TIKTOK (RIOHUB)
 # ==========================================
-def validate_sub_id(sub_id: str) -> bool:
-    if not sub_id or not (1 <= len(sub_id) <= 128):
-        return False
-    if not re.match(r'^[A-Za-z0-9_.-]+$', sub_id):
-        return False
-    parts = sub_id.split('-')
-    if len(parts) > 5:
-        return False
-    return True
+def validate_and_clean_sub_id(user_id: str) -> str:
+    """Chuẩn hóa sub_id phù hợp với quy tắc RioHub: [A-Za-z0-9_.-], tối đa 128 ký tự"""
+    clean_id = re.sub(r'[^A-Za-z0-9_.-]', '_', str(user_id))
+    if not clean_id:
+        clean_id = "web_user"
+    return clean_id[:128]
 
-def createAffiliateLink(product_url_or_id: str, sub_id: str):
-    sub_id_str = str(sub_id).strip()
-    if not validate_sub_id(sub_id_str):
-        return None, "Lỗi: sub_id không đúng quy chuẩn (1-128 ký tự)"
+def createAffiliateLink(product_url_or_id: str, user_id: str):
+    sub_id_str = validate_and_clean_sub_id(user_id)
 
     if not RIOHUB_API_KEY:
         return None, "Hệ thống chưa cài đặt RIOHUB_API_KEY!"
@@ -79,7 +72,7 @@ def createAffiliateLink(product_url_or_id: str, sub_id: str):
     target_url = product_url_or_id
     if str(target_url).startswith("http"):
         try:
-            r_head = requests.head(target_url, allow_redirects=True, timeout=5)
+            r_head = requests.head(target_url, allow_redirects=True, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
             target_url = r_head.url
         except Exception:
             pass
@@ -170,7 +163,7 @@ def convert_shopee_link(original_url: str, user_id: str) -> str:
 
         clean_landing_page = clean_shopee_url(original_url)
         encoded_landing = quote(clean_landing_page, safe='')
-        formatted_sub_id = f"joli-{user_id}"
+        formatted_sub_id = validate_and_clean_sub_id(user_id)
         
         affiliate_link = (
             f"https://s.shopee.vn/an_redir"
@@ -184,7 +177,7 @@ def convert_shopee_link(original_url: str, user_id: str) -> str:
         return None
 
 # ==========================================
-# 4.1 BỔ SUNG: HÀM ĐỒNG BỘ ĐƠN HÀNG SHOPEE TỪ ADDLIVETAG
+# 4.1 HÀM ĐỒNG BỘ ĐƠN HÀNG SHOPEE TỪ ADDLIVETAG
 # ==========================================
 def sync_shopee_orders():
     if not supabase or not SHOPEE_API_KEY:
@@ -204,12 +197,11 @@ def sync_shopee_orders():
                 commission_goc = float(item.get('commission') or item.get('estimated_commission', 0))
                 status = str(item.get('status', 'pending')).strip()
 
-                if order_id and sub_id and "joli-" in sub_id:
-                    user_id = sub_id.replace("joli-", "").strip()
-                    thuc_nhan = commission_goc * 0.6
+                if order_id and sub_id:
+                    thuc_nhan = commission_goc * CASHBACK_RATE
                     supabase.table('transactions').upsert({
                         "order_id": order_id,
-                        "user_id": user_id,
+                        "user_id": sub_id,
                         "commission_goc": commission_goc,
                         "thuc_nhan": thuc_nhan,
                         "status": status,
@@ -219,11 +211,11 @@ def sync_shopee_orders():
         print(f"Lỗi đồng bộ Shopee: {e}")
 
 # ==========================================
-# 4.2 BỔ SUNG: HÀM LẤY THÔNG TIN SẢN PHẨM SHOPEE (ĐỂ HIỂN THỊ ẢNH, TÊN, GIÁ)
+# 4.2 HÀM LẤY THÔNG TIN SẢN PHẨM SHOPEE
 # ==========================================
 def get_shopee_product_info(original_url: str):
     if not SHOPEE_API_KEY:
-        return None
+        return {"title": "Sản phẩm Shopee", "image": "", "price": 0, "commission_rate": 5}
     try:
         api_url = f"https://addlivetag.com/api/v1/product.php?api_key={SHOPEE_API_KEY}&url={quote(original_url)}"
         res = requests.get(api_url, timeout=5)
@@ -232,8 +224,8 @@ def get_shopee_product_info(original_url: str):
             return {
                 "title": data.get("title") or data.get("name", "Sản phẩm Shopee"),
                 "image": data.get("image") or data.get("thumbnail", ""),
-                "price": data.get("price", 0),
-                "commission_rate": data.get("commission_rate", 5)
+                "price": float(data.get("price", 0)),
+                "commission_rate": float(data.get("commission_rate", 5))
             }
     except Exception as e:
         print(f"Lỗi lấy thông tin sản phẩm: {e}")
@@ -253,7 +245,7 @@ def web_convert_link():
     try:
         data = request.get_json(silent=True) or {}
         raw_url = data.get('url', '').strip()
-        user_id = data.get('user_id', 'web_guest').strip()
+        user_id = data.get('user_id', 'web_user').strip()
 
         if not raw_url:
             return jsonify({"success": False, "error": "Vui lòng nhập đường dẫn sản phẩm!"}), 400
@@ -277,7 +269,6 @@ def web_convert_link():
             if not afflink:
                 return jsonify({"success": False, "error": "Lỗi Shopee: Không thể khởi tạo link mua hàng."}), 400
             
-            # Lấy thông tin sản phẩm và tính tiền hoàn dự kiến
             prod_info = get_shopee_product_info(raw_url)
             estimated_commission = (prod_info["price"] * prod_info["commission_rate"] / 100) if prod_info["price"] > 0 else 5000
             cashback_amount = int(estimated_commission * CASHBACK_RATE)
@@ -295,10 +286,10 @@ def web_convert_link():
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)} "}), 500
+        return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (GIỮ NGUYÊN)
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB
 # ==========================================
 @app.route('/api/riohub-webhook', methods=['POST'])
 def riohub_webhook():
@@ -307,19 +298,18 @@ def riohub_webhook():
         
         sub_id = str(data.get('sub_id', '')).strip() 
         order_id = str(data.get('order_id', '')).strip()
-        commission_goc = float(data.get('commission', 0)) 
+        commission_goc = float(data.get('commission') or data.get('est_commission', 0)) 
         status = str(data.get('status', 'pending')).strip() 
 
         if not sub_id or not order_id:
             return jsonify({"success": False, "error": "Thiếu sub_id hoặc order_id"}), 400
 
-        user_id = sub_id.replace("joli-", "").strip()
-        thuc_nhan = commission_goc * 0.6
+        thuc_nhan = commission_goc * CASHBACK_RATE
 
         if supabase:
             supabase.table('transactions').upsert({
                 "order_id": order_id,
-                "user_id": user_id,
+                "user_id": sub_id,
                 "commission_goc": commission_goc,
                 "thuc_nhan": thuc_nhan,
                 "status": status,
@@ -332,7 +322,7 @@ def riohub_webhook():
         return jsonify({"success": False, "error": f"Lỗi webhook: {str(e)}"}), 500
 
 # ==========================================
-# 6.1 BỔ SUNG: API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG/ĐỊNH KỲ
+# 6.1 API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG
 # ==========================================
 @app.route('/api/sync-shopee', methods=['GET', 'POST'])
 def trigger_sync_shopee():
@@ -348,4 +338,4 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-            
+    
