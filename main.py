@@ -289,59 +289,7 @@ def web_convert_link():
         return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (SIÊU PHÒNG THỦ - CHỐNG LỖI 500)
-# ==========================================
-@app.route('/api/riohub-webhook', methods=['POST'])
-def riohub_webhook():
-    try:
-        # Bắt toàn bộ dữ liệu thô RioHub gửi sang để in ra Logs kiểm tra
-        data = request.get_json(silent=True) or request.form.to_dict() or {}
-        print("📥 Dữ liệu thô RioHub gửi về:", json.dumps(data, ensure_ascii=False))
-        
-        # Nhận vét linh hoạt nhiều tên trường khác nhau từ RioHub (không sợ đổi tên field)
-        sub_id = str(data.get('sub_id') or data.get('tag') or data.get('user_sub_id') or '').strip() 
-        order_id = str(data.get('order_id') or data.get('order_sn') or '').strip()
-        
-        # Nếu thiếu order_id, tự sinh mã tạm để tránh lỗi sập webhook
-        if not order_id:
-            order_id = "ORDER_" + datetime.now().strftime('%Y%m%d%H%M%S%f')
-
-        raw_comm = data.get('commission') or data.get('est_commission') or data.get('actual_commission') or 0
-        try:
-            commission_goc = float(raw_comm)
-        except:
-            commission_goc = 0.0
-
-        status = str(data.get('status') or data.get('order_status') or 'pending').strip() 
-
-        # Nếu thiếu sub_id, mặc định gán về web_user hoặc email hiện tại để đơn hàng vẫn được lưu
-        if not sub_id:
-            sub_id = "web_user"
-
-        thuc_nhan = commission_goc * CASHBACK_RATE
-
-        if supabase:
-            try:
-                supabase.table('transactions').upsert({
-                    "order_id": order_id,
-                    "user_id": sub_id,
-                    "commission_goc": commission_goc,
-                    "thuc_nhan": thuc_nhan,
-                    "status": status,
-                    "updated_at": datetime.now().isoformat()
-                }, on_conflict="order_id").execute()
-                print(f"✅ Đã lưu đơn hàng {order_id} cho user {sub_id} vào Supabase thành công!")
-            except Exception as db_err:
-                print(f"⚠️ Lỗi ghi bảng Supabase (nhưng vẫn phản hồi OK cho RioHub): {db_err}")
-
-        return jsonify({"success": True, "message": "Nhận webhook thành công!"}), 200
-
-    except Exception as e:
-        print(f"❌ Lỗi ngoại lệ webhook: {str(e)}")
-        return jsonify({"success": True, "message": "Đã tiếp nhận xử lý"}), 200
-
-# ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (SIÊU PHÒNG THỦ - ÉP LƯU DATABASE)
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (CHUẨN CHỈNH & ÉP LƯU DATABASE)
 # ==========================================
 @app.route('/api/riohub-webhook', methods=['POST'])
 def riohub_webhook():
@@ -349,7 +297,6 @@ def riohub_webhook():
         data = request.get_json(silent=True) or request.form.to_dict() or {}
         print("📥 Dữ liệu thô RioHub gửi về:", json.dumps(data, ensure_ascii=False))
         
-        # Bắt linh hoạt các trường dữ liệu
         sub_id = str(data.get('sub_id') or data.get('tag') or data.get('user_sub_id') or 'web_user').strip()
         order_id = str(data.get('order_id') or data.get('order_sn') or '').strip()
         
@@ -367,7 +314,6 @@ def riohub_webhook():
 
         if supabase:
             try:
-                # Thực hiện insert trực tiếp thay vì upsert để tránh lỗi ràng buộc conflict
                 res = supabase.table('transactions').insert({
                     "order_id": order_id,
                     "user_id": sub_id,
@@ -385,4 +331,22 @@ def riohub_webhook():
     except Exception as e:
         print(f"❌ Lỗi ngoại lệ webhook: {str(e)}")
         return jsonify({"success": True, "message": "Đã tiếp nhận"}), 200
+
+# ==========================================
+# 6.1 API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG
+# ==========================================
+@app.route('/api/sync-shopee', methods=['GET', 'POST'])
+def trigger_sync_shopee():
+    try:
+        sync_shopee_orders()
+        return jsonify({"success": True, "message": "Đã quét và đồng bộ đơn hàng Shopee thành công!"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/', methods=['GET', 'HEAD'])
+def home():
+    return "Joli Affiliate Server is Running!", 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
         
