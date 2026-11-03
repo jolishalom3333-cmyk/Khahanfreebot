@@ -341,20 +341,48 @@ def riohub_webhook():
         return jsonify({"success": True, "message": "Đã tiếp nhận xử lý"}), 200
 
 # ==========================================
-# 6.1 API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (SIÊU PHÒNG THỦ - ÉP LƯU DATABASE)
 # ==========================================
-@app.route('/api/sync-shopee', methods=['GET', 'POST'])
-def trigger_sync_shopee():
+@app.route('/api/riohub-webhook', methods=['POST'])
+def riohub_webhook():
     try:
-        sync_shopee_orders()
-        return jsonify({"success": True, "message": "Đã quét và đồng bộ đơn hàng Shopee thành công!"}), 200
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
+        print("📥 Dữ liệu thô RioHub gửi về:", json.dumps(data, ensure_ascii=False))
+        
+        # Bắt linh hoạt các trường dữ liệu
+        sub_id = str(data.get('sub_id') or data.get('tag') or data.get('user_sub_id') or 'web_user').strip()
+        order_id = str(data.get('order_id') or data.get('order_sn') or '').strip()
+        
+        if not order_id:
+            order_id = "ORDER_" + datetime.now().strftime('%Y%m%d%H%M%S%f')
+
+        raw_comm = data.get('commission') or data.get('est_commission') or data.get('actual_commission') or 1000
+        try:
+            commission_goc = float(raw_comm)
+        except:
+            commission_goc = 1000.0
+
+        status = str(data.get('status') or data.get('order_status') or 'completed').strip() 
+        thuc_nhan = commission_goc * CASHBACK_RATE
+
+        if supabase:
+            try:
+                # Thực hiện insert trực tiếp thay vì upsert để tránh lỗi ràng buộc conflict
+                res = supabase.table('transactions').insert({
+                    "order_id": order_id,
+                    "user_id": sub_id,
+                    "commission_goc": commission_goc,
+                    "thuc_nhan": thuc_nhan,
+                    "status": status,
+                    "updated_at": datetime.now().isoformat()
+                }).execute()
+                print(f"✅ ĐÃ LƯU THÀNH CÔNG đơn {order_id} vào Supabase:", res)
+            except Exception as db_err:
+                print(f"❌ LỖI DATABASE SUPABASE CHI TIẾT: {str(db_err)}")
+
+        return jsonify({"success": True, "message": "Đã xử lý webhook thành công!"}), 200
+
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/', methods=['GET', 'HEAD'])
-def home():
-    return "Joli Affiliate Server is Running!", 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-                    
+        print(f"❌ Lỗi ngoại lệ webhook: {str(e)}")
+        return jsonify({"success": True, "message": "Đã tiếp nhận"}), 200
+        
