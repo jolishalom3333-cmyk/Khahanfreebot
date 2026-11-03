@@ -289,20 +289,29 @@ def web_convert_link():
         return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (ĐÃ NÂNG CẤP PHÒNG THỦ 100%)
 # ==========================================
 @app.route('/api/riohub-webhook', methods=['POST'])
 def riohub_webhook():
     try:
-        data = request.get_json(silent=True) or {}
+        # Lấy toàn bộ dữ liệu thô RioHub gửi sang để in ra Logs kiểm tra
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
+        print("📥 Nhận Webhook từ RioHub:", json.dumps(data, ensure_ascii=False))
         
-        sub_id = str(data.get('sub_id', '')).strip() 
-        order_id = str(data.get('order_id', '')).strip()
-        commission_goc = float(data.get('commission') or data.get('est_commission', 0)) 
-        status = str(data.get('status', 'pending')).strip() 
+        # Nhận vét linh hoạt nhiều tên trường khác nhau từ RioHub (không sợ đổi tên field)
+        sub_id = str(data.get('sub_id') or data.get('tag') or data.get('user_sub_id') or '').strip() 
+        order_id = str(data.get('order_id') or data.get('order_sn') or '').strip()
+        
+        # Nếu thiếu order_id, tự sinh mã tạm để tránh lỗi 400 sập webhook
+        if not order_id:
+            order_id = "UNKNOWN_" + datetime.now().strftime('%Y%m%d%H%M%S')
 
-        if not sub_id or not order_id:
-            return jsonify({"success": False, "error": "Thiếu sub_id hoặc order_id"}), 400
+        commission_goc = float(data.get('commission') or data.get('est_commission') or data.get('actual_commission') or 0) 
+        status = str(data.get('status') or data.get('order_status') or '1').strip() 
+
+        # Nếu thiếu sub_id, mặc định gán về web_user để đơn hàng vẫn được lưu vào CSDL
+        if not sub_id:
+            sub_id = "web_user"
 
         thuc_nhan = commission_goc * CASHBACK_RATE
 
@@ -319,7 +328,8 @@ def riohub_webhook():
         return jsonify({"success": True, "message": "Đã đồng bộ đơn hàng về Supabase thành công!"}), 200
 
     except Exception as e:
-        return jsonify({"success": False, "error": f"Lỗi webhook: {str(e)}"}), 500
+        print(f"❌ Lỗi xử lý webhook: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ==========================================
 # 6.1 API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG
