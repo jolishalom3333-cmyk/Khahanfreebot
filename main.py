@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import math
 import time
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
@@ -57,7 +58,6 @@ def log_click(user_id, raw_url):
 # 3. HÀM XỬ LÝ CHUYỂN ĐỔI LINK TIKTOK (RIOHUB)
 # ==========================================
 def validate_and_clean_sub_id(user_id: str) -> str:
-    """Chuẩn hóa sub_id phù hợp với quy tắc RioHub: [A-Za-z0-9_.-], tối đa 128 ký tự"""
     clean_id = re.sub(r'[^A-Za-z0-9_.-]', '_', str(user_id))
     if not clean_id:
         clean_id = "web_user"
@@ -289,48 +289,95 @@ def web_convert_link():
         return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (CHUẨN CHỈNH & ÉP LƯU DATABASE)
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BẢN CHUẨN GỐC TỪ CODER)
 # ==========================================
+def _riohub_first(data, *keys):
+    for key in keys:
+        value = data.get(key)
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            return value
+    return None
+
+def _riohub_identifier(value):
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    return str(value).strip() or None
+
+def _rio_db_error(error, data):
+    private = {}
+    def collect(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+        elif value is not None:
+            private.append(str(value))
+    collect(data)
+    private.extend(value for key, value in os.environ.items() if any(word in key.upper() for word in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD')))
+    message = str(error)
+    for value in sorted(set(private), key=len, reverse=True):
+        if value:
+            message = message.replace(value, '[REDACTED]')
+    message = re.sub(r'(?:sb_secret_|sb_publishable_)[A-Za-z0-9_.-]+', '[REDACTED]', message)
+    message = re.sub(r'ey[J-Z][A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+', '[REDACTED]', message)
+    return json.dumps(message, ensure_ascii=True)
+
 @app.route('/api/riohub-webhook', methods=['POST'])
 def riohub_webhook():
+    data = request.get_json(silent=True) or request.form.to_dict() or {}
+    if not isinstance(data, dict):
+        print("RIOHUB payload keys[]: invalid payload object", flush=True)
+        return jsonify(ok=False, reason="invalid_payload"), 200
+    print("RIOHUB payload keys:", json.dumps(list(data.keys()), ensure_ascii=True), flush=True)
+    
+    order_id = _riohub_identifier(_riohub_first(data, 'order_id', 'order_sn'))
+    if order_id is None:
+        print("RIOHUB warning: missing_order_id", flush=True)
+        return jsonify(ok=False, reason="missing_order_id"), 200
+        
+    sub_id = _riohub_identifier(_riohub_first(data, 'sub_id', 'tag', 'user_sub_id'))
+    if sub_id is None:
+        print("RIOHUB warning: missing_sub_id", flush=True)
+        return jsonify(ok=False, reason="missing_sub_id"), 200
+        
+    raw_comm = _riohub_first(data, 'commission', 'est_commission', 'actual_commission')
     try:
-        data = request.get_json(silent=True) or request.form.to_dict() or {}
-        print("📥 Dữ liệu thô RioHub gửi về:", json.dumps(data, ensure_ascii=False))
+        if isinstance(raw_comm, bool):
+            raise ValueError('boolean commission')
+        commission_goc = float(raw_comm)
+        if not math.isfinite(commission_goc):
+            raise ValueError('nonfinite commission')
+    except (TypeError, ValueError, OverflowError):
+        commission_goc = None
+        print("RIOHUB warning: missing_or_invalid_commission", flush=True)
         
-        sub_id = str(data.get('sub_id') or data.get('tag') or data.get('user_sub_id') or 'web_user').strip()
-        order_id = str(data.get('order_id') or data.get('order_sn') or '').strip()
+    status = _riohub_identifier(_riohub_first(data, 'status', 'order_status'))
+    thuc_nhan = commission_goc * CASHBACK_RATE if commission_goc is not None else None
+    if thuc_nhan is not None and not math.isfinite(thuc_nhan):
+        print("RIOHUB error: invalid cashback calculation", flush=True)
+        return jsonify(ok=False, reason="invalid_cashback"), 500
         
-        if not order_id:
-            order_id = "ORDER_" + datetime.now().strftime('%Y%m%d%H%M%S%f')
-
-        raw_comm = data.get('commission') or data.get('est_commission') or data.get('actual_commission') or 1000
-        try:
-            commission_goc = float(raw_comm)
-        except:
-            commission_goc = 1000.0
-
-        status = str(data.get('status') or data.get('order_status') or 'completed').strip() 
-        thuc_nhan = commission_goc * CASHBACK_RATE
-
-        if supabase:
-            try:
-                res = supabase.table('transactions').insert({
-                    "order_id": order_id,
-                    "user_id": sub_id,
-                    "commission_goc": commission_goc,
-                    "thuc_nhan": thuc_nhan,
-                    "status": status,
-                    "updated_at": datetime.now().isoformat()
-                }).execute()
-                print(f"✅ ĐÃ LƯU THÀNH CÔNG đơn {order_id} vào Supabase:", res)
-            except Exception as db_err:
-                print(f"❌ LỖI DATABASE SUPABASE CHI TIẾT: {str(db_err)}")
-
-        return jsonify({"success": True, "message": "Đã xử lý webhook thành công!"}), 200
-
-    except Exception as e:
-        print(f"❌ Lỗi ngoại lệ webhook: {str(e)}")
-        return jsonify({"success": True, "message": "Đã tiếp nhận"}), 200
+    try:
+        if supabase is None:
+            raise RuntimeError('Supabase client unavailable')
+        row = {
+            'order_id': order_id,
+            'user_id': sub_id,
+            'commission_goc': commission_goc,
+            'thuc_nhan': thuc_nhan,
+            'status': status,
+            'updated_at': datetime.now().isoformat()
+        }
+        row = {key: value for key, value in row.items() if value is not None}
+        supabase.table('transactions').upsert(row, on_conflict='order_id').execute()
+    except Exception as db_err:
+        print("RIOHUB database error:", _rio_db_error(db_err, data), flush=True)
+        return jsonify(ok=False, reason="database_error"), 500
+        
+    print("RIOHUB success: order_id=" + json.dumps(order_id, ensure_ascii=True), flush=True)
+    return jsonify(ok=True), 200
 
 # ==========================================
 # 6.1 API KÍCH HOẠT QUÉT ĐƠN SHOPEE THỦ CÔNG
@@ -349,4 +396,4 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-        
+                                                 
