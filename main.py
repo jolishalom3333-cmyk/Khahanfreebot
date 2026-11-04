@@ -366,7 +366,7 @@ def riohub_webhook():
         print('RIOHUB warning: missing_order_id', flush=True)
         return jsonify(ok=False, reason='missing_order_id'), 200
 
-    sub_id = _riohub_identifier(_riohub_first(data, 'sub_id', 'tag', 'user_sub_id', 'customer_id'))
+    sub_id = _riohub_identifier(_riohub_first(data, 'subid', 'sub1', 'sub_id', 'tag', 'user_sub_id', 'customer_id'))
     if sub_id is None:
         print('RIOHUB warning: missing_sub_id', flush=True)
         return jsonify(ok=False, reason='missing_sub_id'), 200
@@ -425,3 +425,4 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    
