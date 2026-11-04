@@ -289,9 +289,10 @@ def web_convert_link():
         return jsonify({"success": False, "error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 # ==========================================
-# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BẢN CHUẨN GỐC TỪ CODER)
+# 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BẢN CHUẨN ĐẦY ĐỦ TỪ CODER)
 # ==========================================
 def _riohub_first(data, *keys):
+    # Zero is a real value, especially for commission.
     for key in keys:
         value = data.get(key)
         if value is not None and not (isinstance(value, str) and not value.strip()):
@@ -304,7 +305,8 @@ def _riohub_identifier(value):
     return str(value).strip() or None
 
 def _rio_db_error(error, data):
-    private = {}
+    """Retain diagnostic text, but remove request values and configured secrets."""
+    private = []
     def collect(value):
         if isinstance(value, dict):
             for child in value.values():
@@ -324,41 +326,68 @@ def _rio_db_error(error, data):
     message = re.sub(r'ey[J-Z][A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+', '[REDACTED]', message)
     return json.dumps(message, ensure_ascii=True)
 
-@app.route('/api/riohub-webhook', methods=['POST'])
+def _riohub_unwrap(envelope):
+    """Merge the nested "data" object (dict or JSON string) over the envelope fields."""
+    inner = envelope.get('data')
+    if isinstance(inner, str):
+        try:
+            inner = json.loads(inner)
+        except ValueError:
+            inner = None
+    if not isinstance(inner, dict):
+        return envelope
+    for key in ('order', 'conversion', 'transaction'):
+        if isinstance(inner.get(key), dict):
+            inner = dict(inner[key])
+    print('RIOHUB data keys=' + json.dumps(sorted(inner.keys()), ensure_ascii=True), flush=True)
+    merged = {key: value for key, value in envelope.items() if key != 'data'}
+    merged.update(inner)
+    return merged
+
+@app.route('/api/riohub-webhook', methods=['GET', 'POST'])
 def riohub_webhook():
-    data = request.get_json(silent=True) or request.form.to_dict() or {}
-    if not isinstance(data, dict):
-        print("RIOHUB payload keys[]: invalid payload object", flush=True)
-        return jsonify(ok=False, reason="invalid_payload"), 200
-    print("RIOHUB payload keys:", json.dumps(list(data.keys()), ensure_ascii=True), flush=True)
-    
-    order_id = _riohub_identifier(_riohub_first(data, 'order_id', 'order_sn'))
+    print('RIOHUB hit method=' + request.method + ' content_type=' + json.dumps(request.content_type, ensure_ascii=True) + ' query_keys=' + json.dumps(sorted(request.args.keys()), ensure_ascii=True), flush=True)
+    body = request.get_json(silent=True)
+    if body is None and request.form:
+        body = request.form.to_dict()
+    if body is None and request.method == 'GET':
+        body = request.args.to_dict()
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        print('RIOHUB payload keys[]: invalid payload object', flush=True)
+        return jsonify(ok=False, reason='invalid_payload'), 200
+
+    print('RIOHUB payload keys=' + json.dumps(sorted(body.keys()), ensure_ascii=True), flush=True)
+    data = _riohub_unwrap(body)
+
+    order_id = _riohub_identifier(_riohub_first(data, 'order_id', 'order_sn', 'id'))
     if order_id is None:
-        print("RIOHUB warning: missing_order_id", flush=True)
-        return jsonify(ok=False, reason="missing_order_id"), 200
-        
-    sub_id = _riohub_identifier(_riohub_first(data, 'sub_id', 'tag', 'user_sub_id'))
+        print('RIOHUB warning: missing_order_id', flush=True)
+        return jsonify(ok=False, reason='missing_order_id'), 200
+
+    sub_id = _riohub_identifier(_riohub_first(data, 'sub_id', 'tag', 'user_sub_id', 'customer_id'))
     if sub_id is None:
-        print("RIOHUB warning: missing_sub_id", flush=True)
-        return jsonify(ok=False, reason="missing_sub_id"), 200
-        
-    raw_comm = _riohub_first(data, 'commission', 'est_commission', 'actual_commission')
+        print('RIOHUB warning: missing_sub_id', flush=True)
+        return jsonify(ok=False, reason='missing_sub_id'), 200
+
+    raw_comm = _riohub_first(data, 'commission', 'est_commission', 'actual_commission', 'earned_commission')
     try:
         if isinstance(raw_comm, bool):
             raise ValueError('boolean commission')
-        commission_goc = float(raw_comm)
+        commission_goc = float(raw_comm) if raw_comm is not None else 0.0
         if not math.isfinite(commission_goc):
             raise ValueError('nonfinite commission')
     except (TypeError, ValueError, OverflowError):
-        commission_goc = None
-        print("RIOHUB warning: missing_or_invalid_commission", flush=True)
-        
+        commission_goc = 0.0
+        print('RIOHUB warning: missing_or_invalid_commission', flush=True)
+
     status = _riohub_identifier(_riohub_first(data, 'status', 'order_status'))
     thuc_nhan = commission_goc * CASHBACK_RATE if commission_goc is not None else None
     if thuc_nhan is not None and not math.isfinite(thuc_nhan):
-        print("RIOHUB error: invalid cashback calculation", flush=True)
-        return jsonify(ok=False, reason="invalid_cashback"), 500
-        
+        print('RIOHUB error: invalid cashback calculation', flush=True)
+        return jsonify(ok=False, reason='invalid_cashback'), 500
+
     try:
         if supabase is None:
             raise RuntimeError('Supabase client unavailable')
@@ -373,10 +402,10 @@ def riohub_webhook():
         row = {key: value for key, value in row.items() if value is not None}
         supabase.table('transactions').upsert(row, on_conflict='order_id').execute()
     except Exception as db_err:
-        print("RIOHUB database error:", _rio_db_error(db_err, data), flush=True)
-        return jsonify(ok=False, reason="database_error"), 500
-        
-    print("RIOHUB success: order_id=" + json.dumps(order_id, ensure_ascii=True), flush=True)
+        print('RIOHUB database error:', _rio_db_error(db_err, data), flush=True)
+        return jsonify(ok=False, reason='database_error'), 500
+
+    print('RIOHUB success: order_id=' + json.dumps(order_id, ensure_ascii=True), flush=True)
     return jsonify(ok=True), 200
 
 # ==========================================
@@ -396,4 +425,3 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-                                                 
