@@ -417,90 +417,176 @@ def trigger_sync_shopee():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # ==========================================
-# PHẦN A: ĐOẠN CODE KỸ THUẬT YÊU CẦU THÊM VÀO TRƯỚC if __name__ == '__main__':
+# PHẦN B: ĐOẠN API TÀI KHOẢN VÀ RÚT TIỀN MỚI TỪ FILE `buoc2-render-api.docx`
 # ==========================================
 import hmac
-from decimal import Decimal
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation
+from functools import wraps
 
-@app.route('/api/account-summary', methods=['GET'])
-def joli_account_summary():
-    expected = os.environ.get('ACCOUNT_API_SECRET', '')
-    supplied = request.headers.get('X-Account-Secret', '')
-    if not expected or not hmac.compare_digest(expected.encode('utf-8'), supplied.encode('utf-8')):
-        return jsonify(ok=False), 401
+def joli_api_guard(handler):
+    @wraps(handler)
+    def guarded(*args, **kwargs):
+        expected = os.environ.get('ACCOUNT_API_SECRET', '')
+        supplied = request.headers.get('X-Account-Secret', '')
+        if not expected or not hmac.compare_digest(expected.encode(), supplied.encode()):
+            return jsonify(ok=False), 401
+        if supabase is None:
+            return jsonify(ok=False), 503
+        try:
+            return handler(*args, **kwargs)
+        except Exception:
+            return jsonify(ok=False), 503
+    return guarded
 
-    raw_user_id = request.args.get('user_id')
-    if raw_user_id is None or raw_user_id == '':
-        return jsonify(ok=False), 400
+def joli_decimal(value):
+    number = Decimal(str(value if value is not None else 0))
+    if not number.is_finite():
+        raise ValueError('Invalid database amount')
+    return number
 
-    user_id = validate_and_clean_sub_id(raw_user_id)
-    if supabase is None:
-        return jsonify(ok=False), 503
+def joli_user_id(raw):
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return validate_and_clean_sub_id(raw)
 
-    approved_statuses = ['2', 'completed', 'approved', 'settled', 'paid']
-    excluded_statuses = ['cancelled', 'refunded', 'rejected', 'invalid']
-
-    pending = Decimal('0')
-    approved = Decimal('0')
-    total_orders = 0
-    orders = []
-
-    page_size = 50
+def joli_rows(table, user_id=None):
     offset = 0
+    while True:
+        query = supabase.table(table).select('*')
+        if user_id is not None:
+            query = query.eq('user_id', user_id)
+        if table == 'transactions':
+            query = query.order('updated_at', desc=True).order('order_id')
+        else:
+            query = query.order('created_at', desc=True).order('id', desc=True)
+        rows = query.range(offset, offset + 49).execute().data
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError('Invalid database response')
+        yield from rows
+        if len(rows) < 50:
+            break
+        offset += 50
 
+def joli_totals(transactions, withdrawals):
+    pending = Decimal(0)
+    approved = Decimal(0)
+    settled = Decimal(0)
+    reserved = Decimal(0)
+    withdrawn = Decimal(0)
+    approved_statuses = {'2', 'completed', 'approved', 'settled', 'paid'}
+    excluded = {'cancelled', 'refunded', 'rejected', 'invalid'}
+    for row in transactions:
+        amount = joli_decimal(row.get('thuc_nhan'))
+        status = str(row.get('status') or '').strip().lower()
+        if status in approved_statuses:
+            approved += amount
+        elif status not in excluded:
+            pending += amount
+        if str(row.get('status')) == '2':
+            settled += amount
+        for row in withdrawals:
+        amount = joli_decimal(row['amount'])
+        if row['status'] in {'pending', 'approved', 'paid'}:
+            reserved += amount
+        if row['status'] == 'paid':
+            withdrawn += amount
+    return dict(
+        balance_pending=float(pending), balance_approved=float(approved),
+        balance_available=float(settled - reserved), balance_withdrawn=float(withdrawn),
+        total_orders=len(transactions),
+        has_pending=any(row['status'] == 'pending' for row in withdrawals),
+    )
+def joli_order(row):
+    return dict(
+        order_id=row.get('order_id'), status=row.get('status'),
+        commission_goc=float(joli_decimal(row.get('commission_goc'))),
+        thuc_nhan=float(joli_decimal(row.get('thuc_nhan'))), updated_at=row.get('updated_at'),
+    )
+def joli_rpc(name, parameters, success_code=200):
+    data = supabase.rpc(name, parameters).execute().data
+    if not isinstance(data, dict) or not isinstance(data.get('ok'), bool):
+        raise ValueError('Invalid database response')
+    if data['ok']:
+        if not isinstance(data.get('withdrawal'), dict):
+            raise ValueError('Missing withdrawal')
+        return jsonify(data), success_code
+    code = data.get('code')
+    reasons = {'invalid_amount', 'insufficient_balance', 'pending_exists',
+               'invalid_status', 'not_found', 'final_status'}
+    if code not in {400, 404, 409} or data.get('reason') not in reasons:
+        raise ValueError('Invalid database error')
+    return jsonify(ok=False, reason=data['reason']), code
+@app.route('/api/account-summary', methods=['GET'])
+@joli_api_guard
+def joli_account_summary():
+    user_id = joli_user_id(request.args.get('user_id'))
+    if user_id is None:
+        return jsonify(ok=False), 400
+    transactions = list(joli_rows('transactions', user_id))
+    withdrawals = list(joli_rows('withdraw_requests', user_id))
+    totals = joli_totals(transactions, withdrawals)
+    return jsonify(
+        ok=True, user_id=user_id, **totals,
+        orders=[joli_order(row) for row in transactions[:50]], withdrawals=withdrawals[:20],
+    )
+@app.route('/api/withdraw-request', methods=['POST'])
+@joli_api_guard
+def joli_withdraw_request():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, reason='invalid_body'), 400
+    user_id = joli_user_id(body.get('user_id'))
+    if user_id is None:
+        return jsonify(ok=False, reason='invalid_user_id'), 400
+    raw = body.get('amount')
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return jsonify(ok=False, reason='invalid_amount'), 400
     try:
-        while True:
-            query = (
-                supabase.table('transactions')
-                .select('order_id, status, commission_goc, thuc_nhan, updated_at')
-                .eq('user_id', user_id)
-                .order('updated_at', desc=True)
-                .limit(page_size)
-            )
-            if offset:
-                query = query.range(offset, offset + page_size - 1)
-            
-            result = query.execute()
-            rows = result.data
-            if not isinstance(rows, list):
-                raise ValueError('Invalid transaction response')
-
-            for row in rows:
-                cashback = Decimal(str(row.get('thuc_nhan') or 0))
-                commission = Decimal(str(row.get('commission_goc') or 0))
-                if not cashback.is_finite() or not commission.is_finite():
-                    raise ValueError('Invalid transaction amount')
-
-                status = str(row.get('status') or '').strip().lower()
-                if status in approved_statuses:
-                    approved += cashback
-                elif status not in excluded_statuses:
-                    pending += cashback
-
-                if len(orders) < 50:
-                    orders.append({
-                        'order_id': row.get('order_id'),
-                        'status': row.get('status'),
-                        'commission_goc': float(commission),
-                        'thuc_nhan': float(cashback),
-                        'updated_at': row.get('updated_at')
-                    })
-
-            total_orders += len(rows)
-            if len(rows) < page_size:
-                break
-            offset += page_size
-
-        return jsonify(
-            ok=True,
-            user_id=user_id,
-            balance_pending=float(pending),
-            balance_approved=float(approved),
-            total_orders=total_orders,
-            orders=orders
-        )
-    except Exception:
-        return jsonify(ok=False), 503
+        amount = Decimal(str(raw))
+    except InvalidOperation:
+        return jsonify(ok=False, reason='invalid_amount'), 400
+    if not amount.is_finite() or amount < 30000 or amount != amount.to_integral_value():
+        return jsonify(ok=False, reason='invalid_amount'), 400
+    # PostgreSQL serializes balance checking and insertion across all Render workers.
+    if amount > Decimal('9007199254740991'):
+        return jsonify(ok=False, reason='invalid_amount'), 400
+    return joli_rpc('joli_create_withdrawal', {
+        'p_user_id': user_id, 'p_amount': int(amount),
+    }, 201)
+@app.route('/api/admin/overview', methods=['GET'])
+@joli_api_guard
+def joli_admin_overview():
+    members = defaultdict(list)
+    requests_by_user = defaultdict(list)
+    for row in joli_rows('transactions'):
+        members[row['user_id']].append(row)
+    withdrawals = list(joli_rows('withdraw_requests'))
+    for row in withdrawals:
+        requests_by_user[row['user_id']].append(row)
+    users = [dict(user_id=user_id, **joli_totals(rows, requests_by_user[user_id]))
+             for user_id, rows in sorted(members.items())]
+    return jsonify(ok=True, users=users, withdrawals=withdrawals[:200])
+@app.route('/api/admin/withdraw-status', methods=['POST'])
+@joli_api_guard
+def joli_admin_withdraw_status():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, reason='invalid_body'), 400
+    item_id = body.get('id')
+    status = body.get('status')
+    note = body.get('note')
+    if isinstance(item_id, bool) or not isinstance(item_id, int) or item_id < 1:
+        return jsonify(ok=False, reason='invalid_id'), 400
+    if item_id > 9223372036854775807:
+        return jsonify(ok=False, reason='invalid_id'), 400
+    if status not in ('approved', 'rejected', 'paid'):
+        return jsonify(ok=False, reason='invalid_status'), 400
+    if note is not None and (not isinstance(note, str) or len(note) > 2000):
+        return jsonify(ok=False, reason='invalid_note'), 400
+    return joli_rpc('joli_set_withdraw_status', {
+        'p_id': item_id, 'p_status': status, 'p_note': note,
+    })
 
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
@@ -508,4 +594,3 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    
