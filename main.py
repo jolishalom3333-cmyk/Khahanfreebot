@@ -292,7 +292,6 @@ def web_convert_link():
 # 6. API NHẬN WEBHOOK / POSTBACK TỪ RIOHUB (BẢN CHUẨN ĐẦY ĐỦ TỪ CODER)
 # ==========================================
 def _riohub_first(data, *keys):
-    # Zero is a real value, especially for commission.
     for key in keys:
         value = data.get(key)
         if value is not None and not (isinstance(value, str) and not value.strip()):
@@ -305,7 +304,6 @@ def _riohub_identifier(value):
     return str(value).strip() or None
 
 def _rio_db_error(error, data):
-    """Retain diagnostic text, but remove request values and configured secrets."""
     private = []
     def collect(value):
         if isinstance(value, dict):
@@ -327,7 +325,6 @@ def _rio_db_error(error, data):
     return json.dumps(message, ensure_ascii=True)
 
 def _riohub_unwrap(envelope):
-    """Merge the nested "data" object (dict or JSON string) over the envelope fields."""
     inner = envelope.get('data')
     if isinstance(inner, str):
         try:
@@ -418,6 +415,92 @@ def trigger_sync_shopee():
         return jsonify({"success": True, "message": "Đã quét và đồng bộ đơn hàng Shopee thành công!"}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+# ==========================================
+# PHẦN A: ĐOẠN CODE KỸ THUẬT YÊU CẦU THÊM VÀO TRƯỚC if __name__ == '__main__':
+# ==========================================
+import hmac
+from decimal import Decimal
+
+@app.route('/api/account-summary', methods=['GET'])
+def joli_account_summary():
+    expected = os.environ.get('ACCOUNT_API_SECRET', '')
+    supplied = request.headers.get('X-Account-Secret', '')
+    if not expected or not hmac.compare_digest(expected.encode('utf-8'), supplied.encode('utf-8')):
+        return jsonify(ok=False), 401
+
+    raw_user_id = request.args.get('user_id')
+    if raw_user_id is None or raw_user_id == '':
+        return jsonify(ok=False), 400
+
+    user_id = validate_and_clean_sub_id(raw_user_id)
+    if supabase is None:
+        return jsonify(ok=False), 503
+
+    approved_statuses = ['2', 'completed', 'approved', 'settled', 'paid']
+    excluded_statuses = ['cancelled', 'refunded', 'rejected', 'invalid']
+
+    pending = Decimal('0')
+    approved = Decimal('0')
+    total_orders = 0
+    orders = []
+
+    page_size = 50
+    offset = 0
+
+    try:
+        while True:
+            query = (
+                supabase.table('transactions')
+                .select('order_id, status, commission_goc, thuc_nhan, updated_at')
+                .eq('user_id', user_id)
+                .order('updated_at', desc=True)
+                .limit(page_size)
+            )
+            if offset:
+                query = query.range(offset, offset + page_size - 1)
+            
+            result = query.execute()
+            rows = result.data
+            if not isinstance(rows, list):
+                raise ValueError('Invalid transaction response')
+
+            for row in rows:
+                cashback = Decimal(str(row.get('thuc_nhan') or 0))
+                commission = Decimal(str(row.get('commission_goc') or 0))
+                if not cashback.is_finite() or not commission.is_finite():
+                    raise ValueError('Invalid transaction amount')
+
+                status = str(row.get('status') or '').strip().lower()
+                if status in approved_statuses:
+                    approved += cashback
+                elif status not in excluded_statuses:
+                    pending += cashback
+
+                if len(orders) < 50:
+                    orders.append({
+                        'order_id': row.get('order_id'),
+                        'status': row.get('status'),
+                        'commission_goc': float(commission),
+                        'thuc_nhan': float(cashback),
+                        'updated_at': row.get('updated_at')
+                    })
+
+            total_orders += len(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
+        return jsonify(
+            ok=True,
+            user_id=user_id,
+            balance_pending=float(pending),
+            balance_approved=float(approved),
+            total_orders=total_orders,
+            orders=orders
+        )
+    except Exception:
+        return jsonify(ok=False), 503
 
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
