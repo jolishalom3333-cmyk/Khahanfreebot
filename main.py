@@ -485,17 +485,28 @@ def joli_totals(transactions, withdrawals):
             pending += amount
         if str(row.get('status')) == '2':
             settled += amount
-    for row in withdrawals:
+        for row in withdrawals:
         amount = joli_decimal(row['amount'])
-        if row['status'] in {'pending', 'approved', 'paid'}:
+        w_status = str(row.get('status') or '').strip().lower()
+        
+        # Chỉ giữ lại (reserved) khi đang chờ duyệt hoặc đã duyệt nhưng chưa trả tiền
+        if w_status in {'pending', 'approved'}:
             reserved += amount
-        if row['status'] == 'paid':
+            
+        # Nếu đã thanh toán (paid), tính vào tổng tiền đã rút
+        if w_status == 'paid':
             withdrawn += amount
+            
+    # Trừ đi số tiền đã thanh toán (paid) khỏi số dư có thể rút
+    available = settled - reserved - withdrawn
+    if available < 0:
+        available = Decimal(0)
+
     return dict(
         balance_pending=float(pending), balance_approved=float(approved),
-        balance_available=float(settled - reserved), balance_withdrawn=float(withdrawn),
+        balance_available=float(available), balance_withdrawn=float(withdrawn),
         total_orders=len(transactions),
-        has_pending=any(row['status'] == 'pending' for row in withdrawals),
+        has_pending=any(str(row.get('status')) == 'pending' for row in withdrawals),
     )
 def joli_order(row):
     return dict(
