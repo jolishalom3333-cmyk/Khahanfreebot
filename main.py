@@ -19,7 +19,7 @@ SHOPEE_AFFILIATE_ID = os.environ.get('SHOPEE_AFFILIATE_ID', '17317720169').strip
 RIOHUB_API_KEY = os.environ.get('RIOHUB_API_KEY', '').strip()
 SHOPEE_API_KEY = os.environ.get('SHOPEE_API_KEY', '99ba514854ed2fdf9b68b6a913aa8192a1021272ee82f639').strip()
 
-CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 70)) / 100.0
+CASHBACK_RATE = float(os.environ.get('CASHBACK_PERCENT', 60)) / 100.0
 CREATOR_USERNAME = os.environ.get('CREATOR_USERNAME', 'thaonguyen2002').strip()
 
 RIOHUB_BASE_URLS = [
