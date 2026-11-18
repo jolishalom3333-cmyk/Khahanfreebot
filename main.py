@@ -485,7 +485,7 @@ def joli_totals(transactions, withdrawals):
             pending += amount
         if str(row.get('status')) == '2':
             settled += amount
-        for row in withdrawals:
+    for row in withdrawals:
         amount = joli_decimal(row['amount'])
         w_status = str(row.get('status') or '').strip().lower()
         
