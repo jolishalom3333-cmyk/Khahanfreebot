@@ -645,7 +645,7 @@ def joli_monthly_stats(all_transactions):
 def joli_admin_overview():
     members = defaultdict(list)
     requests_by_user = defaultdict(list)
-        all_transactions = list(joli_rows('transactions'))
+    all_transactions = list(joli_rows('transactions'))
     for row in all_transactions:
         members[row['user_id']].append(row)
     withdrawals = list(joli_rows('withdraw_requests'))
