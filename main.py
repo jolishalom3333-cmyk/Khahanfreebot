@@ -565,6 +565,81 @@ def joli_withdraw_request():
     return joli_rpc('joli_create_withdrawal', {
         'p_user_id': user_id, 'p_amount': int(amount),
     }, 201)
+    from datetime import timezone
+
+
+def joli_month_key(row):
+    vn_tz = timezone(timedelta(hours=7))
+    raw = row.get('updated_at') or row.get('created_at')
+    if not raw:
+        return 'Khác'
+    try:
+        s = str(raw).strip()
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(vn_tz).strftime('%Y-%m')
+    except Exception:
+        s = str(raw)
+        return s[:7] if len(s) >= 7 else 'Khác'
+
+
+def joli_monthly_stats(all_transactions):
+    buckets = {}
+    for row in all_transactions:
+        m = joli_month_key(row)
+        if m not in buckets:
+            buckets[m] = {
+                'month': m,
+                'settled_count': 0,
+                'settled_commission_goc': Decimal(0),
+                'settled_thuc_nhan': Decimal(0),
+                'gross_profit': Decimal(0),
+                'pending_count': 0,
+                'pending_commission_goc': Decimal(0),
+                'pending_thuc_nhan': Decimal(0),
+                'cancelled_count': 0,
+                'cancelled_commission_goc': Decimal(0),
+                'cancelled_thuc_nhan': Decimal(0),
+            }
+        st = str(row.get('status') or '').strip().lower()
+        goc = joli_decimal(row.get('commission_goc'))
+        nhan = joli_decimal(row.get('thuc_nhan'))
+        b = buckets[m]
+
+        if st == '2':
+            b['settled_count'] += 1
+            b['settled_commission_goc'] += goc
+            b['settled_thuc_nhan'] += nhan
+            b['gross_profit'] += (goc - nhan)
+        elif st == '1':
+            b['pending_count'] += 1
+            b['pending_commission_goc'] += goc
+            b['pending_thuc_nhan'] += nhan
+        elif st in {'3', 'cancelled', 'canceled', 'rejected', 'invalid'}:
+            b['cancelled_count'] += 1
+            b['cancelled_commission_goc'] += goc
+            b['cancelled_thuc_nhan'] += nhan
+
+    result = []
+    for m in sorted(buckets.keys(), reverse=True):
+        b = buckets[m]
+        result.append({
+            'month': b['month'],
+            'settled_count': b['settled_count'],
+            'settled_commission_goc': float(b['settled_commission_goc']),
+            'settled_thuc_nhan': float(b['settled_thuc_nhan']),
+            'gross_profit': float(b['gross_profit']),
+            'pending_count': b['pending_count'],
+            'pending_commission_goc': float(b['pending_commission_goc']),
+            'pending_thuc_nhan': float(b['pending_thuc_nhan']),
+            'cancelled_count': b['cancelled_count'],
+            'cancelled_commission_goc': float(b['cancelled_commission_goc']),
+            'cancelled_thuc_nhan': float(b['cancelled_thuc_nhan']),
+        })
+    return result
 @app.route('/api/admin/overview', methods=['GET'])
 @joli_api_guard
 def joli_admin_overview():
