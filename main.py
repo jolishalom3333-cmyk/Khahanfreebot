@@ -645,14 +645,21 @@ def joli_monthly_stats(all_transactions):
 def joli_admin_overview():
     members = defaultdict(list)
     requests_by_user = defaultdict(list)
-    for row in joli_rows('transactions'):
+        all_transactions = list(joli_rows('transactions'))
+    for row in all_transactions:
         members[row['user_id']].append(row)
     withdrawals = list(joli_rows('withdraw_requests'))
     for row in withdrawals:
         requests_by_user[row['user_id']].append(row)
     users = [dict(user_id=user_id, **joli_totals(rows, requests_by_user[user_id]))
              for user_id, rows in sorted(members.items())]
-    return jsonify(ok=True, users=users, withdrawals=withdrawals[:200])
+    monthly_stats = joli_monthly_stats(all_transactions)
+    return jsonify(
+        ok=True,
+        users=users,
+        withdrawals=withdrawals[:200],
+        monthly_stats=monthly_stats,
+    )
 @app.route('/api/admin/withdraw-status', methods=['POST'])
 @joli_api_guard
 def joli_admin_withdraw_status():
