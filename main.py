@@ -645,17 +645,8 @@ def joli_monthly_stats(all_transactions):
 def joli_admin_overview():
     try:
         all_transactions = list(joli_rows('transactions'))
-        members = defaultdict(list)
-        requests_by_user = defaultdict(list)
-        for row in all_transactions:
-            members[row['user_id']].append(row)
+        users = list(joli_rows('user_balances'))
         withdrawals = list(joli_rows('withdraw_requests'))
-        for row in withdrawals:
-            requests_by_user[row['user_id']].append(row)
-        users = [
-            dict(user_id=user_id, **joli_summary_from_rows(rows, requests_by_user.get(user_id, [])))
-            for user_id, rows in sorted(members.items())
-        ]
         monthly_stats = joli_monthly_stats(all_transactions)
         return jsonify(
             ok=True,
